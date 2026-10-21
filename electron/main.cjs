@@ -1631,12 +1631,17 @@ function registerIpc() {
       feishuAgent?.stop?.();
       bridge?.stop();
       fs.cpSync(source, target, { recursive: true, force: true });
-      dataLocation.saveDir(target);
+      const saved = dataLocation.saveDir(target);
+      // The current process already exported the old data directory at startup.
+      // app.relaunch inherits this environment, so update it or the new process
+      // will keep using the old directory even though the pointer file changed.
+      process.env.TEST_DATA_DIR = saved;
+      log(`data:migrate source=${source} target=${saved} relaunch=1`);
       setTimeout(() => {
         app.relaunch();
         app.exit(0);
       }, 350);
-      return { ok: true, dataDir: target };
+      return { ok: true, dataDir: saved };
     } catch (error) {
       return { error: String(error?.message || error) };
     }
