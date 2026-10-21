@@ -49,4 +49,13 @@ fs.copyFileSync(
   path.join(target, "tools", "login-inject.ps1"),
 );
 
+// Pi loads TypeScript extensions at runtime through jiti. The Pi bundle lives
+// outside app.asar, so keep this dependency next to it in extraResources.
+const jitiSource = path.join(root, "node_modules", "jiti");
+if (fs.existsSync(jitiSource)) {
+  fs.cpSync(jitiSource, path.join(target, "vendor", "jiti"), {
+    recursive: true,
+  });
+}
+
 console.log(`prepared ${target}`);

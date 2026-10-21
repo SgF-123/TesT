@@ -12,6 +12,7 @@ class NativeLogin {
     this.stopping = false;
     this.readyPromise = null;
     this.resolveReady = null;
+    this.readyTimer = null;
     this.providers = null;
     this.catalogCache = null;
     this.catalogPromise = null;
@@ -23,7 +24,15 @@ class NativeLogin {
       return this.readyPromise;
     }
 
-    const helper = path.join(__dirname, "login-helper.cjs");
+    const bundledHelper = path.join(__dirname, "login-helper.cjs");
+    const unpackedHelper = bundledHelper.replace(
+      `${path.sep}app.asar${path.sep}`,
+      `${path.sep}app.asar.unpacked${path.sep}`,
+    );
+    const helper =
+      unpackedHelper !== bundledHelper && fs.existsSync(unpackedHelper)
+        ? unpackedHelper
+        : bundledHelper;
     if (!fs.existsSync(helper)) {
       return Promise.reject(new Error(`login-helper not found: ${helper}`));
     }
@@ -61,6 +70,26 @@ class NativeLogin {
       this.resolveReady = resolve;
     });
 
+    const settleReady = (providers = []) => {
+      if (this.readyTimer) {
+        clearTimeout(this.readyTimer);
+        this.readyTimer = null;
+      }
+      const resolve = this.resolveReady;
+      this.resolveReady = null;
+      resolve?.(providers);
+    };
+    this.readyTimer = setTimeout(() => {
+      if (!this.resolveReady) {
+        return;
+      }
+      this.onMessage({
+        type: "login_error",
+        message: "登录服务启动超时，请重启 TesT 后重试",
+      });
+      settleReady();
+    }, 20000);
+
     const stdout = readline.createInterface({ input: child.stdout });
     stdout.on("line", (line) => {
       if (!line.trim()) {
@@ -79,23 +108,20 @@ class NativeLogin {
         this.onLog(`ready providers=${message.providers.length}`);
         this.providers = message.providers;
         this.onMessage({ type: "login_providers", providers: message.providers });
-        this.resolveReady?.(message.providers);
-        this.resolveReady = null;
+        settleReady(message.providers);
         return;
       }
 
       if (message.type === "providers" && Array.isArray(message.providers)) {
         this.providers = message.providers;
         this.onMessage({ type: "login_providers", providers: message.providers });
-        this.resolveReady?.(message.providers);
-        this.resolveReady = null;
+        settleReady(message.providers);
         return;
       }
 
       if (message.type === "fatal") {
         this.onMessage({ type: "login_error", message: message.message });
-        this.resolveReady?.([]);
-        this.resolveReady = null;
+        settleReady();
         return;
       }
 
@@ -174,13 +200,21 @@ class NativeLogin {
 
     child.on("error", (error) => {
       this.onMessage({ type: "login_error", message: String(error) });
-      this.resolveReady?.([]);
-      this.resolveReady = null;
+      settleReady();
     });
 
     child.on("exit", (code, signal) => {
       this.onLog(`exit code=${code} signal=${signal || ""}`);
       this.child = null;
+      // A packaged helper can fail before it emits "fatal". Do not leave the
+      // renderer's provider dialog stuck on "loading" forever.
+      if (this.resolveReady) {
+        this.onMessage({
+          type: "login_error",
+          message: `登录服务已退出（code=${code ?? "?"}${signal ? `, signal=${signal}` : ""}）`,
+        });
+        settleReady();
+      }
       if (!this.stopping) {
         this.onMessage({ type: "login_helper_closed" });
       }
@@ -260,6 +294,10 @@ class NativeLogin {
 
   stop() {
     this.stopping = true;
+    if (this.readyTimer) {
+      clearTimeout(this.readyTimer);
+      this.readyTimer = null;
+    }
     if (this.child) {
       try {
         this.child.stdin.end();

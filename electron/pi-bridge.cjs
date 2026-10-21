@@ -47,6 +47,10 @@ class PiBridge {
       PI_SKIP_VERSION_CHECK: "1",
       NO_COLOR: "1",
     };
+    const vendorPath = path.resolve(this.cli, "..", "..", "vendor");
+    env.NODE_PATH = [vendorPath, process.env.NODE_PATH]
+      .filter(Boolean)
+      .join(path.delimiter);
 
     let child;
     try {

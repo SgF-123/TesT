@@ -3,6 +3,7 @@ productName: TesT
 asar: true
 asarUnpack:
   - node_modules/node-pty/**/*
+  - electron/login-helper.cjs
 compression: normal
 publish:
   provider: generic

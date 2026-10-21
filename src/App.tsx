@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  memo,
   useEffect,
   useMemo,
   useRef,
@@ -100,6 +101,9 @@ import { MorphIcon } from "morphicons/react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+import { DotWave, Ring2 } from "ldrs/react";
+import "ldrs/react/DotWave.css";
+import "ldrs/react/Ring2.css";
 import {
   ArrowUp as ArrowUpNode,
   Check as CheckNode,
@@ -1039,15 +1043,39 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function DotSpinner() {
+const DotSpinner = memo(function DotSpinner({
+  size = 24,
+  speed = 1.1,
+}: {
+  size?: number;
+  speed?: number;
+}) {
   return (
-    <span className="dot-spinner">
-      <i />
-      <i />
-      <i />
+    <span className="dot-spinner" aria-hidden="true">
+      <DotWave size={size} speed={speed} color="var(--accent)" />
     </span>
   );
-}
+});
+
+const LoadingRing = memo(function LoadingRing({
+  size = 12,
+  speed = 0.9,
+}: {
+  size?: number;
+  speed?: number;
+}) {
+  return (
+    <span className="loading-ring" aria-hidden="true">
+      <Ring2
+        size={size}
+        speed={speed}
+        stroke={2}
+        color="var(--accent)"
+        bgOpacity={0.14}
+      />
+    </span>
+  );
+});
 
 function ToolCard({
   name,
@@ -1074,7 +1102,7 @@ function ToolCard({
           <span className="tool-state">
             {state === "running" ? (
               <>
-                <span className="ring" /> 运行中
+                <LoadingRing /> 运行中
               </>
             ) : state === "error" ? (
               <>失败</>
@@ -5939,7 +5967,13 @@ function LoginDialog({
                   />
                 </div>
                 <span className="preset-count">
-                  {loading ? "加载中…" : `${filtered.length} 个服务商`}
+                  {loading ? (
+                    <span className="inline-loading">
+                      <LoadingRing /> 加载中…
+                    </span>
+                  ) : (
+                    `${filtered.length} 个服务商`
+                  )}
                 </span>
               </div>
               <div className="login-filters">
@@ -6195,7 +6229,13 @@ function LoginDialog({
                         disabled={loading || (mode === "api_key" && !apiKey.trim())}
                       >
                         <LogIn size={12} />
-                        {loading ? "处理中…" : "开始登录"}
+                        {loading ? (
+                          <>
+                            <LoadingRing /> 处理中…
+                          </>
+                        ) : (
+                          "开始登录"
+                        )}
                       </Button>
                     </div>
                   </div>
@@ -6665,7 +6705,13 @@ function ModelBrowserDialog({
               />
             </div>
             <span className="preset-count">
-              {loading ? "加载中…" : `${filtered.length} / ${models.length} 个`}
+              {loading ? (
+                <span className="inline-loading">
+                  <LoadingRing /> 加载中…
+                </span>
+              ) : (
+                `${filtered.length} / ${models.length} 个`
+              )}
             </span>
           </div>
 
@@ -12650,7 +12696,7 @@ export default function App() {
                 >
                   <Bell size={13} /> 触发 Toast
                 </Button>
-                <span className="ring" />
+                <LoadingRing size={14} />
                 <DotSpinner />
               </div>
               <div className="skeleton-stack">

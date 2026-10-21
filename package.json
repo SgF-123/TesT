@@ -64,6 +64,7 @@
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.76.0",
     "electron-updater": "^6.8.9",
+    "ldrs": "^1.1.9",
     "node-pty": "^1.1.0",
     "qrcode-generator": "^2.0.4"
   },
