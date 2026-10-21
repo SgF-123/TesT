@@ -2,6 +2,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { app } = require("electron");
 
+const DEFAULT_FEED_URL =
+  "https://github.com/SgF-123/TesT/releases/latest/download/";
+
 let autoUpdater = null;
 let feedUrl = null;
 let onStatus = () => {};
@@ -32,9 +35,9 @@ function readFeedUrl() {
       }
     }
   } catch {
-    // Invalid update.json is treated as unconfigured.
+    // Invalid update.json falls back to the built-in feed.
   }
-  return null;
+  return DEFAULT_FEED_URL;
 }
 
 function publish(next) {
@@ -162,7 +165,7 @@ function clearFeed() {
     if (fs.existsSync(file)) {
       fs.rmSync(file, { force: true });
     }
-    feedUrl = null;
+    feedUrl = DEFAULT_FEED_URL;
     setup();
     return { ok: true, status: getStatus() };
   } catch (error) {

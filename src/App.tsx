@@ -4173,7 +4173,7 @@ function SettingsDialog({
                 <div className="update-section-head">
                   <div>
                     <b>TesT 桌面端</b>
-                    <small>独立更新 · 以后接你的仓库</small>
+                    <small>GitHub Releases 自动更新</small>
                   </div>
                   <span className="setting-value">
                     {updateStatus?.version || "0.1.0"}
@@ -4197,7 +4197,7 @@ function SettingsDialog({
                   className="input"
                   value={feedUrl}
                   onChange={(event) => setFeedUrl(event.target.value)}
-                  placeholder="https://github.com/你的仓库/releases/latest/download"
+                  placeholder="https://github.com/SgF-123/TesT/releases/latest/download/"
                 />
                 <div className="update-actions">
                   <Button
@@ -4213,7 +4213,7 @@ function SettingsDialog({
                     icon={<Eraser size={12} />}
                     onClick={onClearUpdateFeed}
                   >
-                    清除
+                    恢复默认
                   </Button>
                 </div>
                 <div className="update-actions">
@@ -4242,7 +4242,8 @@ function SettingsDialog({
                 <p className="update-note">
                   当前源：{updateStatus?.feedUrl || "未配置"}
                   <br />
-                  配置写入 <code>%APPDATA%\TesT\update.json</code>
+                  默认源为 GitHub Releases；自定义配置写入{" "}
+                  <code>%APPDATA%\TesT\update.json</code>
                 </p>
               </section>
 

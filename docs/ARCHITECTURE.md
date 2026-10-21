@@ -45,6 +45,8 @@ throttled to the animation frame.
 - Production JavaScript is packed into `app.asar`.
 - Native `node-pty` files are emitted to `app.asar.unpacked`.
 - Only `zh-CN` and `en-US` Electron locale packs are shipped.
+- The update source defaults to the latest GitHub Release and can be overridden
+  through `%APPDATA%\TesT\update.json`.
 
 The NSIS installer and portable executable share the same optimized application
 payload. The portable build unpacks that payload to a temporary directory on each

@@ -4,6 +4,9 @@ asar: true
 asarUnpack:
   - node_modules/node-pty/**/*
 compression: normal
+publish:
+  provider: generic
+  url: https://github.com/SgF-123/TesT/releases/latest/download/
 electronLanguages:
   - zh-CN
   - en-US
