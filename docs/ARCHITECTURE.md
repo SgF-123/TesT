@@ -44,6 +44,11 @@ throttled to the animation frame.
 - `build-resources/` is generated locally and contains Node and the Pi bundle.
 - Production JavaScript is packed into `app.asar`.
 - Native `node-pty` files are emitted to `app.asar.unpacked`.
+- `electron/login-helper.cjs` is emitted to `app.asar.unpacked` because it is
+  launched by the bundled Node binary as an external process.
+- The Pi runtime's `jiti` dependency is copied to `resources/vendor/jiti` and
+  exposed through `NODE_PATH` so TypeScript extensions can load outside the
+  ASAR archive.
 - Only `zh-CN` and `en-US` Electron locale packs are shipped.
 - The update source defaults to the latest GitHub Release and can be overridden
   through `%APPDATA%\TesT\update.json`.
@@ -62,6 +67,7 @@ bundle the matching Node binary, and produce unsigned DMG images.
 
 - the running Node executable;
 - the Pi coding-agent bundle;
-- the login injection helper.
+- the login injection helper;
+- the `jiti` runtime used by Pi extensions.
 
 Set `TEST_PI_BUNDLE` when the Pi source is not in a sibling `pi/` directory.
