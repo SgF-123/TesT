@@ -52,6 +52,10 @@ The NSIS installer and portable executable share the same optimized application
 payload. The portable build unpacks that payload to a temporary directory on each
 launch.
 
+macOS preview builds are produced by `.github/workflows/macos-build.yml` on
+separate Apple Silicon and Intel runners. They use `node-pty` Darwin prebuilds,
+bundle the matching Node binary, and produce unsigned DMG images.
+
 ## Build inputs
 
 `scripts/prepare-electron.cjs` copies:

@@ -50,9 +50,13 @@ TesT 是面向 Pi 编码代理的 Windows 桌面客户端。它把一次完整�
 
 > 当前构建未进行商业代码签名，Windows SmartScreen 可能显示提示。
 
+### macOS 预览版
+
+macOS 版由 GitHub Actions 的 macOS 构建机生成，提供 Apple Silicon `arm64` 与 Intel `x64` 两种 DMG。当前构建不使用 Apple Developer 证书，因此首次启动需要右键应用并选择“打开”，或在“系统设置 → 隐私与安全性”中允许。
+
 ## 本地开发
 
-需要 Node.js 24+、npm 和 Windows 10/11。
+需要 Node.js 24+、npm，以及 Windows 10/11 或 macOS 13+。
 
 ```powershell
 git clone https://github.com/SgF-123/TesT.git
@@ -71,6 +75,12 @@ npm run electron:dev
 
 ```powershell
 npm run dist
+```
+
+构建 macOS DMG：
+
+```bash
+npm run dist:mac
 ```
 
 打包脚本默认从同级目录 `..\pi\packages\coding-agent\dist\bundle` 读取 Pi bundle；也可以通过 `TEST_PI_BUNDLE` 指向其他位置。

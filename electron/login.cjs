@@ -11,6 +11,11 @@ function psQuote(value) {
 }
 
 function open({ onClosed }) {
+  if (process.platform !== "win32") {
+    return {
+      error: "当前系统暂不支持终端登录，请使用模型设置里的 API Key 或原生登录。",
+    };
+  }
   if (current && current.running) {
     return { alreadyOpen: true };
   }

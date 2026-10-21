@@ -19,7 +19,6 @@ files:
   - mobile/**
   - package.json
   - "!node_modules/**/*.pdb"
-  - "!node_modules/node-pty/prebuilds/darwin-*/**"
   - "!node_modules/node-pty/prebuilds/win32-arm64/**"
   - "!node_modules/node-pty/third_party/conpty/**/win10-arm64/**"
 extraResources:
@@ -52,3 +51,14 @@ nsis:
   shortcutName: TesT
 portable:
   artifactName: TesT-Portable-${version}.exe
+mac:
+  icon: build/icon.icns
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+  artifactName: TesT-${version}-${arch}.${ext}
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+dmg:
+  artifactName: TesT-${version}-${arch}.dmg

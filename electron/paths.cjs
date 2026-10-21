@@ -90,7 +90,8 @@ function bundleIndex() {
 }
 
 function nodeExe() {
-  const packaged = path.join(process.resourcesPath, "node", "node.exe");
+  const binaryName = process.platform === "win32" ? "node.exe" : "node";
+  const packaged = path.join(process.resourcesPath, "node", binaryName);
   if (app.isPackaged && fs.existsSync(packaged)) {
     return packaged;
   }

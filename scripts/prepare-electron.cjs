@@ -11,26 +11,36 @@ fs.mkdirSync(path.join(target, "tools"), { recursive: true });
 
 const nodeSource = process.env.TEST_NODE || process.execPath;
 if (!fs.existsSync(nodeSource)) {
-  throw new Error(`node.exe not found: ${nodeSource}`);
+  throw new Error(`Node binary not found: ${nodeSource}`);
 }
-fs.copyFileSync(nodeSource, path.join(target, "node", "node.exe"));
+const nodeFileName = process.platform === "win32" ? "node.exe" : "node";
+fs.copyFileSync(nodeSource, path.join(target, "node", nodeFileName));
 
+const bundledPiRoot = path.join(
+  root,
+  "node_modules",
+  "@earendil-works",
+  "pi-coding-agent",
+);
 const piSource =
   process.env.TEST_PI_BUNDLE ||
-  path.join(
-    sourceRoot,
-    "pi",
-    "packages",
-    "coding-agent",
-    "dist",
-    "bundle",
-  );
+  [
+    path.join(
+      sourceRoot,
+      "pi",
+      "packages",
+      "coding-agent",
+      "dist",
+      "bundle",
+    ),
+    path.join(bundledPiRoot, "dist", "bundle"),
+  ].find((candidate) => fs.existsSync(candidate));
 if (!fs.existsSync(piSource)) {
   throw new Error(`Pi bundle not found: ${piSource}`);
 }
 fs.cpSync(piSource, path.join(target, "pi"), { recursive: true });
 fs.copyFileSync(
-  path.join(sourceRoot, "pi", "packages", "coding-agent", "package.json"),
+  path.join(piSource, "..", "..", "package.json"),
   path.join(target, "pi", "package.json"),
 );
 

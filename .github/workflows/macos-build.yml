@@ -1,0 +1,55 @@
+name: Build macOS DMG
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*-macos*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: macOS ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14-arm64
+            arch: arm64
+          - runner: macos-14
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build renderer and runtime resources
+        run: |
+          npm run build
+          npm run prepare:electron
+
+      - name: Build unsigned DMG
+        run: npx electron-builder --mac dmg --${{ matrix.arch }} --publish never
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TesT-macos-${{ matrix.arch }}
+          path: release/*.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+
