@@ -1,0 +1,51 @@
+appId: com.testdesktop.app
+productName: TesT
+asar: true
+asarUnpack:
+  - node_modules/node-pty/**/*
+compression: normal
+electronLanguages:
+  - zh-CN
+  - en-US
+npmRebuild: false
+directories:
+  output: release
+files:
+  - dist/**
+  - electron/**
+  - mobile/**
+  - package.json
+  - "!node_modules/**/*.pdb"
+  - "!node_modules/node-pty/prebuilds/darwin-*/**"
+  - "!node_modules/node-pty/prebuilds/win32-arm64/**"
+  - "!node_modules/node-pty/third_party/conpty/**/win10-arm64/**"
+extraResources:
+  - from: build-resources
+    to: .
+  - from: build/icon.png
+    to: icon.png
+  - from: build/tray.png
+    to: tray.png
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+nsis:
+  artifactName: TesT-Setup-${version}.exe
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: TesT
+portable:
+  artifactName: TesT-Portable-${version}.exe

@@ -1,0 +1,45 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+build-resources/
+release/
+shell/bin/
+shell/obj/
+shell/publish/
+
+# local caches
+.builder-cache/
+.dotnet/
+.npm-cache/
+.nuget/
+
+# local application data and test artifacts
+data/
+work/
+*.log
+*.trace
+*.db
+*.sqlite
+*.sqlite3
+
+# credentials and secrets
+.env
+.env.*
+!.env.example
+auth.json
+models-store.json
+secrets/
+*.pem
+*.key
+*.pfx
+*.p12
+
+# editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.user
