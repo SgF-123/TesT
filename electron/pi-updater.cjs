@@ -2,9 +2,10 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const https = require("node:https");
-const { execFileSync } = require("node:child_process");
 const { app } = require("electron");
 const paths = require("./paths.cjs");
+const kernelDeps = require("./kernel-deps.cjs");
+const { extractTarball } = require("./tarball.cjs");
 
 const PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 const LATEST_URL =
@@ -207,14 +208,6 @@ function download(url, target, onProgress, redirects = 0) {
   });
 }
 
-function extract(tarball, target) {
-  fs.mkdirSync(target, { recursive: true });
-  execFileSync("tar", ["-xzf", tarball, "-C", target], {
-    windowsHide: true,
-    stdio: "ignore",
-  });
-}
-
 function safeVersion(version) {
   return String(version || "latest").replace(/[^\w.-]/g, "_");
 }
@@ -333,7 +326,7 @@ async function install() {
       message: "正在安装 Pi 内核…",
     });
     const extracted = path.join(temp, "extracted");
-    extract(tarballPath, extracted);
+    extractTarball(tarballPath, extracted);
     const packageSource = path.join(extracted, "package");
     const bundleSource = path.join(packageSource, "dist", "bundle");
     if (
@@ -353,6 +346,7 @@ async function install() {
     fs.mkdirSync(versionDir, { recursive: true });
     const packageTarget = path.join(versionDir, "package");
     fs.cpSync(packageSource, packageTarget, { recursive: true });
+    kernelDeps.stageRuntimeDependencies(packageTarget, paths.vendorDir());
     const bundleTarget = path.join(packageTarget, "dist", "bundle");
     fs.copyFileSync(
       path.join(packageSource, "package.json"),

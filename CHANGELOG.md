@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Updating the Pi kernel from the npm registry no longer rolls back on
+  launch. The runtime dependencies the Pi bundle loads lazily (`jiti` for
+  TypeScript extensions) were looked up relative to the Pi CLI path, which only
+  exists for the bundled kernel. They are now resolved from the app's vendor
+  folder and staged inside the downloaded kernel, so extensions keep loading
+  after a kernel update.
+
 ## [0.2.0] - 2026-10-21
 
 ### Added

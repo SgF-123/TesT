@@ -4,12 +4,34 @@ const readline = require("node:readline");
 const { spawn } = require("node:child_process");
 const { prepareShellRuntime } = require("./shell-runtime.cjs");
 
+// Runtime dependencies the Pi bundle requires lazily (jiti) live in the app's
+// vendor folder, not next to the CLI. Only the bundled kernel keeps a vendor
+// directory beside it, so the app-provided one always wins and the legacy
+// CLI-relative lookup stays as a fallback.
+function piNodePath(cli, vendorDir = "") {
+  const entries = [];
+  if (vendorDir) {
+    entries.push(vendorDir);
+  }
+  if (cli) {
+    const adjacent = path.resolve(cli, "..", "..", "vendor");
+    if (fs.existsSync(adjacent)) {
+      entries.push(adjacent);
+    }
+  }
+  if (process.env.NODE_PATH) {
+    entries.push(process.env.NODE_PATH);
+  }
+  return [...new Set(entries)].join(path.delimiter);
+}
+
 class PiBridge {
   constructor(options) {
     this.cli = options.cli;
     this.cwd = options.cwd;
     this.dataDir = options.dataDir;
     this.node = options.node;
+    this.vendorDir = options.vendorDir || "";
     this.onRecord = options.onRecord || (() => {});
 
     this.child = null;
@@ -59,10 +81,7 @@ class PiBridge {
       PI_SKIP_VERSION_CHECK: "1",
       NO_COLOR: "1",
     };
-    const vendorPath = path.resolve(this.cli, "..", "..", "vendor");
-    env.NODE_PATH = [vendorPath, process.env.NODE_PATH]
-      .filter(Boolean)
-      .join(path.delimiter);
+    env.NODE_PATH = piNodePath(this.cli, this.vendorDir);
 
     this.onRecord({
       type: "bridge_log",
@@ -322,4 +341,4 @@ class PiBridge {
   }
 }
 
-module.exports = { PiBridge };
+module.exports = { PiBridge, piNodePath };

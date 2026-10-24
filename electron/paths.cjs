@@ -89,6 +89,24 @@ function bundleIndex() {
   );
 }
 
+// Pi's bundle loads a few dependencies dynamically at runtime (jiti compiles
+// TypeScript extensions on the fly), so they cannot be bundled into app.asar
+// and ship as extraResources instead. Always resolve that folder from the app
+// install: a downloaded kernel lives under the data directory and has no
+// vendor folder of its own, so deriving it from the Pi CLI path breaks every
+// TypeScript extension as soon as the kernel is not the bundled one.
+function vendorDir() {
+  const candidates = [
+    path.join(process.resourcesPath || "", "vendor"),
+    path.join(__dirname, "..", "build-resources", "vendor"),
+  ];
+  const found = candidates.find((candidate) => fs.existsSync(candidate));
+  if (found) {
+    return found;
+  }
+  return app.isPackaged ? "" : path.join(__dirname, "..", "node_modules");
+}
+
 function nodeExe() {
   const binaryName = process.platform === "win32" ? "node.exe" : "node";
   const packaged = path.join(process.resourcesPath, "node", binaryName);
@@ -232,4 +250,5 @@ module.exports = {
   sessionsDir,
   sessionsArchiveDir,
   skillsDir,
+  vendorDir,
 };

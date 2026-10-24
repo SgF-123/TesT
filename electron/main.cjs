@@ -13,7 +13,7 @@ const {
   nativeImage,
   shell,
 } = require("electron");
-const { PiBridge } = require("./pi-bridge.cjs");
+const { PiBridge, piNodePath } = require("./pi-bridge.cjs");
 const paths = require("./paths.cjs");
 const piConfig = require("./pi-config.cjs");
 const discovery = require("./model-discovery.cjs");
@@ -1508,6 +1508,7 @@ function startBridge() {
       (app.isPackaged ? app.getPath("home") : paths.projectRoot()),
     dataDir: paths.piDataDir(),
     node: paths.nodeExe(),
+    vendorDir: paths.vendorDir(),
     onRecord: (record) => {
       if (record?.type === "bridge_status") {
         log(`bridge:${record.status}`);
@@ -1905,15 +1906,12 @@ function runPiPackageCommand(args) {
       return;
     }
 
-    const vendorPath = path.resolve(cli, "..", "..", "vendor");
     const env = {
       ...process.env,
       PI_CODING_AGENT_DIR: paths.piDataDir(),
       PI_SKIP_VERSION_CHECK: "1",
       NO_COLOR: "1",
-      NODE_PATH: [vendorPath, process.env.NODE_PATH]
-        .filter(Boolean)
-        .join(path.delimiter),
+      NODE_PATH: piNodePath(cli, paths.vendorDir()),
     };
 
     execFile(
