@@ -3390,6 +3390,7 @@ if (!gotLock) {
             notifyTray("TesT 更新", next.message || "有可用更新");
           }
         },
+        onLog: (text) => log(text),
       });
       piUpdater.init({
         onStatus: (status) => push({ type: "pi_update_status", status }),

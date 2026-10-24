@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.1] - 2026-10-24
 
 ### Fixed
 
@@ -10,6 +10,14 @@
   exists for the bundled kernel. They are now resolved from the app's vendor
   folder and staged inside the downloaded kernel, so extensions keep loading
   after a kernel update.
+- Desktop updates now download with HTTP range resume, automatic retries, and
+  SHA512 verification instead of abandoning a partial installer after a
+  dropped GitHub connection.
+- Failed desktop downloads keep their partial data and expose a direct retry
+  action; completed installers are launched with the correct NSIS update
+  arguments and the existing installation directory.
+- Extension status text strips terminal ANSI escapes and hides inactive LSP
+  statuses, so control codes no longer appear as broken characters in the UI.
 
 ## [0.2.0] - 2026-10-21
 

@@ -1,6 +1,8 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawn } = require("node:child_process");
 const { app } = require("electron");
+const { downloadWithResume } = require("./update-downloader.cjs");
 
 const DEFAULT_FEED_URL =
   "https://github.com/SgF-123/TesT/releases/latest/download/";
@@ -8,6 +10,10 @@ const DEFAULT_FEED_URL =
 let autoUpdater = null;
 let feedUrl = null;
 let onStatus = () => {};
+let onLog = () => {};
+let availableInfo = null;
+let downloadedFile = null;
+let downloading = false;
 let status = {
   state: "unconfigured",
   message: "未配置更新地址",
@@ -47,6 +53,9 @@ function publish(next) {
     version: app.getVersion(),
     feedUrl,
   };
+  if (next.state === "error") {
+    onLog(`update:error ${next.message || ""}`);
+  }
   onStatus(status);
 }
 
@@ -55,6 +64,8 @@ function attachEvents(updater) {
     publish({ state: "checking", message: "正在检查更新…" });
   });
   updater.on("update-available", (info) => {
+    availableInfo = info || null;
+    downloadedFile = null;
     publish({
       state: "available",
       message: `发现新版本 ${info?.version || ""}`.trim(),
@@ -62,6 +73,8 @@ function attachEvents(updater) {
     });
   });
   updater.on("update-not-available", () => {
+    availableInfo = null;
+    downloadedFile = null;
     publish({ state: "latest", message: "已经是最新版本" });
   });
   updater.on("download-progress", (progress) => {
@@ -79,6 +92,7 @@ function attachEvents(updater) {
     });
   });
   updater.on("error", (error) => {
+    onLog(`update:error ${String(error?.stack || error)}`);
     publish({
       state: "error",
       message: String(error?.message || error),
@@ -128,6 +142,7 @@ function setup() {
 
 function init(options = {}) {
   onStatus = options.onStatus || onStatus;
+  onLog = options.onLog || onLog;
   feedUrl = readFeedUrl();
   setup();
 }
@@ -196,15 +211,81 @@ async function check() {
 }
 
 async function download() {
-  if (!autoUpdater) {
+  if (!autoUpdater || !availableInfo) {
     return { error: "更新未配置" };
   }
+  if (downloading) {
+    return { error: "更新正在下载中" };
+  }
 
+  downloading = true;
   try {
-    await autoUpdater.downloadUpdate();
-    return { ok: true };
+    const files = Array.isArray(availableInfo.files)
+      ? availableInfo.files
+      : [];
+    const file =
+      files.find((item) => String(item?.url || "").toLowerCase().endsWith(".exe")) ||
+      files[0];
+    if (!file?.url) {
+      throw new Error("更新清单中没有可下载的安装包");
+    }
+
+    const url = new URL(String(file.url), feedUrl).toString();
+    const version = String(availableInfo.version || "update").replace(
+      /[^\w.-]/g,
+      "_",
+    );
+    const target = path.join(
+      app.getPath("userData"),
+      "updates",
+      `TesT-Setup-${version}.exe`,
+    );
+    publish({
+      state: "downloading",
+      message: `正在下载 ${version}…`,
+      percent: 0,
+      availableVersion: availableInfo.version || null,
+    });
+    const result = await downloadWithResume({
+      url,
+      target,
+      sha512: file.sha512,
+      size: Number(file.size || 0) || undefined,
+      log: onLog,
+      onProgress: ({ percent }) => {
+        publish({
+          state: "downloading",
+          message: `正在下载 ${version}（${percent}%）`,
+          percent,
+          availableVersion: availableInfo.version || null,
+        });
+      },
+      onRetry: ({ attempt, retries, wait, error }) => {
+        publish({
+          state: "downloading",
+          message: `下载中断，${Math.ceil(wait / 1000)} 秒后续传（${attempt}/${retries}）：${error}`,
+          availableVersion: availableInfo.version || null,
+        });
+      },
+    });
+    downloadedFile = result.path;
+    publish({
+      state: "downloaded",
+      message: `新版本 ${version} 已下载，重启后安装`,
+      percent: 100,
+      availableVersion: availableInfo.version || null,
+    });
+    return { ok: true, path: result.path };
   } catch (error) {
-    return { error: String(error?.message || error) };
+    const message = String(error?.message || error);
+    publish({
+      state: "error",
+      message: `更新下载失败：${message}`,
+      availableVersion: availableInfo?.version || null,
+    });
+    return { error: message };
+  } finally {
+    downloading = false;
   }
 }
 
@@ -214,6 +295,26 @@ function install() {
   }
 
   try {
+    if (downloadedFile && fs.existsSync(downloadedFile)) {
+      const installDir = path.dirname(process.execPath);
+      const child = spawn(
+        downloadedFile,
+        ["--updated", "/S", "--force-run", `/D=${installDir}`],
+        {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: false,
+        },
+      );
+      child.unref();
+      publish({
+        state: "installing",
+        message: "安装程序已启动，TesT 即将退出",
+        percent: 100,
+      });
+      setTimeout(() => app.quit(), 350);
+      return { ok: true };
+    }
     autoUpdater.quitAndInstall(false, true);
     return { ok: true };
   } catch (error) {

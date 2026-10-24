@@ -1568,13 +1568,17 @@ function SettingsDialog({
                   <Button variant="secondary" onClick={onCheckUpdate}>
                     <RotateCcw size={12} /> 检查桌面端更新
                   </Button>
-                  {updateStatus?.state === "available" && (
+                  {(updateStatus?.state === "available" ||
+                    (updateStatus?.state === "error" &&
+                      updateStatus?.availableVersion)) && (
                     <Button
                       variant="primary"
                       icon={<Download size={12} />}
                       onClick={onDownloadUpdate}
                     >
-                      下载更新
+                      {updateStatus?.state === "error"
+                        ? "重试下载"
+                        : "下载更新"}
                     </Button>
                   )}
                   {updateStatus?.state === "downloaded" && (
@@ -1588,6 +1592,8 @@ function SettingsDialog({
                   )}
                 </div>
                 <p className="update-note">
+                  下载中断会自动续传并重试；仍失败时可再次点击“重试下载”。
+                  <br />
                   当前源：{updateStatus?.feedUrl || "未配置"}
                   <br />
                   默认源为 GitHub Releases；自定义配置写入{" "}
