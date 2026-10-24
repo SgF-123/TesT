@@ -1,5 +1,6 @@
 import { Quote, X } from "lucide-react";
 import type { DraftAnnotation } from "./annotations";
+import { isInactiveLspStatus, stripAnsi } from "./text-sanitize";
 
 export function ExtensionStrip({
   statuses,
@@ -8,24 +9,38 @@ export function ExtensionStrip({
   statuses: Record<string, string>;
   widgets: Record<string, { lines: string[] }>;
 }) {
-  if (
-    Object.keys(statuses).length === 0 &&
-    Object.keys(widgets).length === 0
-  ) {
+  const visibleStatuses = Object.entries(statuses)
+    .map(([key, text]) => [key, stripAnsi(text).replace(/\s+/g, " ").trim()] as const)
+    .filter(
+      ([key, text]) => text.length > 0 && !isInactiveLspStatus(key, text),
+    );
+  const visibleWidgets = Object.entries(widgets)
+    .map(
+      ([key, widget]) =>
+        [
+          key,
+          widget.lines
+            .map((line) => stripAnsi(line).replace(/\s+$/g, ""))
+            .filter(Boolean),
+        ] as const,
+    )
+    .filter(([, lines]) => lines.length > 0);
+
+  if (visibleStatuses.length === 0 && visibleWidgets.length === 0) {
     return null;
   }
 
   return (
     <div className="extension-strip">
-      {Object.entries(statuses).map(([key, text]) => (
+      {visibleStatuses.map(([key, text]) => (
         <span className="extension-status" key={key}>
           <i />
           {text}
         </span>
       ))}
-      {Object.entries(widgets).map(([key, widget]) => (
+      {visibleWidgets.map(([key, lines]) => (
         <pre className="extension-widget" key={key}>
-          {widget.lines.join("\n")}
+          {lines.join("\n")}
         </pre>
       ))}
     </div>
