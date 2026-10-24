@@ -2,7 +2,6 @@ const fs = require("node:fs");
 const path = require("node:path");
 const electron = require("electron");
 const paths = require("../paths.cjs");
-const { validateFeishuConfig, redactFeishuConfig } = require("./feishu.cjs");
 
 const safeStorage = electron?.safeStorage;
 
@@ -46,6 +45,53 @@ function normalizeConfig(input = {}) {
     receiveId: stringValue(input.receiveId),
     allowedOpenIds,
     allowAll: Boolean(input.allowAll),
+  };
+}
+
+function validateFeishuConfig(config = {}) {
+  const errors = [];
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return { ok: false, errors: ["配置必须是对象"] };
+  }
+  if (typeof config.appId !== "string" || !config.appId.trim()) {
+    errors.push("appId 必填");
+  }
+  if (typeof config.appSecret !== "string" || !config.appSecret.trim()) {
+    errors.push("appSecret 必填");
+  }
+  if (
+    config.receiveIdType !== undefined &&
+    !["chat_id", "open_id", "user_id", "email"].includes(config.receiveIdType)
+  ) {
+    errors.push("receiveIdType 不支持");
+  }
+  if (
+    config.allowedOpenIds !== undefined &&
+    (!Array.isArray(config.allowedOpenIds) ||
+      config.allowedOpenIds.some((item) => typeof item !== "string"))
+  ) {
+    errors.push("allowedOpenIds 必须是字符串数组");
+  }
+  if (
+    config.autoPair === false &&
+    !config.allowAll &&
+    !(config.allowedOpenIds || []).length
+  ) {
+    errors.push("关闭自动配对时，必须配置 allowedOpenIds 或 allowAll");
+  }
+  if (
+    config.autoPair === false &&
+    (typeof config.receiveId !== "string" || !config.receiveId.trim())
+  ) {
+    errors.push("关闭自动配对时，receiveId 必填");
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+function redactFeishuConfig(config = {}) {
+  return {
+    ...config,
+    appSecret: config.appSecret ? "***" : "",
   };
 }
 

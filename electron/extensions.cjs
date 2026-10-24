@@ -12,6 +12,11 @@ function readJson(file) {
   }
 }
 
+function writeJson(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
 function sanitize(value) {
   return String(value || "item")
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-")
@@ -124,6 +129,305 @@ function extensionInfo(dir, enabled, scope = "global") {
   };
 }
 
+function packageSourceOf(entry) {
+  if (typeof entry === "string") {
+    return entry.trim();
+  }
+  if (entry && typeof entry === "object" && typeof entry.source === "string") {
+    return entry.source.trim();
+  }
+  return "";
+}
+
+function packageEnabled(entry) {
+  return !(
+    entry &&
+    typeof entry === "object" &&
+    entry.autoload === false
+  );
+}
+
+function settingsPathForScope(scope, workspace) {
+  if (scope === "project" && workspace) {
+    return path.join(workspace, ".pi", "settings.json");
+  }
+  return path.join(paths.piDataDir(), "settings.json");
+}
+
+function parseNpmPackageName(source) {
+  const spec = source.startsWith("npm:") ? source.slice(4).trim() : "";
+  if (!spec) {
+    return "";
+  }
+  const versionAt = spec.lastIndexOf("@");
+  return versionAt > 0 ? spec.slice(0, versionAt) : spec;
+}
+
+function parseGitPackage(source) {
+  let raw = String(source || "").trim();
+  if (raw.startsWith("git:")) {
+    raw = raw.slice(4).trim();
+  }
+  if (!raw) {
+    return null;
+  }
+
+  const explicit =
+    /^(https?|ssh|git):\/\//i.test(raw) || raw.startsWith("git@");
+  const shorthand = /^[A-Za-z0-9.-]+\.[A-Za-z]{2,}\//.test(raw);
+  if (!explicit && !shorthand) {
+    return null;
+  }
+
+  let host = "";
+  let repoPath = "";
+  let ref = "";
+
+  if (raw.startsWith("git@")) {
+    const match = raw.match(/^git@([^:]+):(.+)$/);
+    if (!match) {
+      return null;
+    }
+    host = match[1];
+    repoPath = match[2];
+  } else if (raw.includes("://")) {
+    try {
+      const parsed = new URL(raw);
+      host = parsed.hostname;
+      repoPath = parsed.pathname.replace(/^\/+/, "");
+    } catch {
+      return null;
+    }
+  } else {
+    const slash = raw.indexOf("/");
+    if (slash < 0) {
+      return null;
+    }
+    host = raw.slice(0, slash);
+    repoPath = raw.slice(slash + 1);
+  }
+
+  const refAt = repoPath.lastIndexOf("@");
+  if (refAt > 0) {
+    ref = repoPath.slice(refAt + 1);
+    repoPath = repoPath.slice(0, refAt);
+  }
+  repoPath = repoPath.replace(/\.git$/i, "").replace(/^\/+|\/+$/g, "");
+
+  if (
+    !host ||
+    !repoPath ||
+    repoPath.split("/").length < 2 ||
+    repoPath.split("/").includes("..") ||
+    /[\\\u0000]/.test(`${host}${repoPath}`)
+  ) {
+    return null;
+  }
+
+  return { host, path: repoPath, ref: ref || undefined };
+}
+
+function packageInstallPath(source, scope, workspace) {
+  const projectBase =
+    scope === "project" && workspace ? path.join(workspace, ".pi") : "";
+  if (source.startsWith("npm:")) {
+    const name = parseNpmPackageName(source);
+    const root = projectBase || paths.piDataDir();
+    return name ? path.join(root, "npm", "node_modules", name) : "";
+  }
+
+  const git = parseGitPackage(source);
+  if (git) {
+    const root = projectBase || paths.piDataDir();
+    return path.join(root, "git", git.host, git.path);
+  }
+
+  const base =
+    scope === "project" && workspace
+      ? path.join(workspace, ".pi")
+      : paths.piDataDir();
+  return path.resolve(base, source);
+}
+
+function manifestCount(value) {
+  if (Array.isArray(value)) {
+    return value.length;
+  }
+  return typeof value === "string" && value.trim() ? 1 : 0;
+}
+
+function countFiles(target, predicate, depth = 0) {
+  if (!target || depth > 6) {
+    return 0;
+  }
+  try {
+    const stat = fs.statSync(target);
+    if (stat.isFile()) {
+      return predicate(target) ? 1 : 0;
+    }
+    if (!stat.isDirectory()) {
+      return 0;
+    }
+    return fs
+      .readdirSync(target, { withFileTypes: true })
+      .reduce(
+        (total, entry) =>
+          total +
+          countFiles(path.join(target, entry.name), predicate, depth + 1),
+        0,
+      );
+  } catch {
+    return 0;
+  }
+}
+
+function countManifestResources(installedPath, value, predicate) {
+  if (!installedPath) {
+    return 0;
+  }
+  const entries = Array.isArray(value) ? value : [value];
+  return entries.reduce((total, entry) => {
+    if (typeof entry !== "string" || !entry.trim()) {
+      return total;
+    }
+    return total + countFiles(path.resolve(installedPath, entry), predicate);
+  }, 0);
+}
+
+function packageResources(pkg, installedPath) {
+  const manifest = pkg?.pi && typeof pkg.pi === "object" ? pkg.pi : {};
+  let extensions = manifestCount(manifest.extensions);
+  let skills = countManifestResources(
+    installedPath,
+    manifest.skills,
+    (file) => path.basename(file) === "SKILL.md",
+  );
+  let prompts = countManifestResources(
+    installedPath,
+    manifest.prompts,
+    (file) => /\.md$/i.test(file),
+  );
+
+  if (!extensions && installedPath) {
+    for (const name of ["index.ts", "index.js", "index.mjs"]) {
+      if (fs.existsSync(path.join(installedPath, name))) {
+        extensions = 1;
+        break;
+      }
+    }
+  }
+  if (!skills && installedPath) {
+    skills = countFiles(
+      path.join(installedPath, "skills"),
+      (file) => path.basename(file) === "SKILL.md",
+    );
+  }
+  if (!prompts && installedPath) {
+    prompts = countFiles(
+      path.join(installedPath, "prompts"),
+      (file) => /\.md$/i.test(file),
+    );
+  }
+
+  return { extensions, skills, prompts };
+}
+
+function packageInfo(entry, scope, index, workspace) {
+  const source = packageSourceOf(entry);
+  if (!source) {
+    return null;
+  }
+
+  const installedPath = packageInstallPath(source, scope, workspace);
+  const installed = Boolean(installedPath && fs.existsSync(installedPath));
+  const pkg = installed ? readJson(path.join(installedPath, "package.json")) : null;
+  const resources = packageResources(pkg, installedPath);
+  const fallbackName =
+    parseNpmPackageName(source) ||
+    parseGitPackage(source)?.path.split("/").pop() ||
+    path.basename(installedPath || source);
+  const resourceText = [
+    resources.extensions ? `${resources.extensions} 扩展` : "",
+    resources.skills ? `${resources.skills} 技能` : "",
+    resources.prompts ? `${resources.prompts} 提示词` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const description = [
+    String(pkg?.description || (installed ? "Pi 包" : "Pi 包尚未下载")),
+    resourceText,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return {
+    kind: "extension",
+    name: String(pkg?.name || fallbackName || source),
+    desc: description,
+    path: installedPath,
+    enabled: packageEnabled(entry),
+    scope,
+    readonly: scope === "project",
+    package: true,
+    source,
+    version: pkg?.version ? String(pkg.version) : undefined,
+    installed,
+    packageIndex: index,
+    resources,
+  };
+}
+
+function listPackages(workspace) {
+  const result = [];
+  for (const scope of ["global", "project"]) {
+    if (scope === "project" && !workspace) {
+      continue;
+    }
+    const file = settingsPathForScope(scope, workspace);
+    const settings = readJson(file);
+    if (!Array.isArray(settings?.packages)) {
+      continue;
+    }
+    settings.packages.forEach((entry, index) => {
+      const info = packageInfo(entry, scope, index, workspace);
+      if (info) {
+        result.push(info);
+      }
+    });
+  }
+  return result;
+}
+
+function setPackageEnabled(workspace, scope, source, enabled) {
+  const targetSource = String(source || "").trim();
+  if (!targetSource) {
+    throw new Error("缺少 package source");
+  }
+  const file = settingsPathForScope(scope, workspace);
+  const settings = readJson(file) || {};
+  const packages = Array.isArray(settings.packages) ? settings.packages : [];
+  const index = packages.findIndex(
+    (entry) => packageSourceOf(entry) === targetSource,
+  );
+  if (index < 0) {
+    throw new Error(`未找到 package：${targetSource}`);
+  }
+
+  const entry = packages[index];
+  if (enabled) {
+    packages[index] =
+      typeof entry === "string" ? entry : { ...entry, autoload: true };
+  } else {
+    packages[index] =
+      typeof entry === "string"
+        ? { source: entry, autoload: false }
+        : { ...entry, autoload: false };
+  }
+  settings.packages = packages;
+  writeJson(file, settings);
+  return { source: targetSource, enabled, path: file };
+}
+
 function scan(dir, enabled, kind, scope = "global") {
   if (!fs.existsSync(dir)) {
     return [];
@@ -197,6 +501,7 @@ function list(workspace) {
       : []),
   ];
   const extensions = [
+    ...listPackages(workspace),
     ...scan(paths.extensionsDir(), true, "extension", "global"),
     ...scan(paths.disabledDir("extension"), false, "extension", "global"),
     ...(projectExtensionsDir
@@ -356,4 +661,11 @@ function remove(kind, name) {
   return { removed: false };
 }
 
-module.exports = { install, list, remove, toggle, trust };
+module.exports = {
+  install,
+  list,
+  remove,
+  setPackageEnabled,
+  toggle,
+  trust,
+};

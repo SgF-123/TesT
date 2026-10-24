@@ -1,35 +1,40 @@
-# 远程通道接口（Remote Channels）
+# 远程通道（Remote Channels）
 
-当前阶段只定义接口，不做飞书接入处理：
+当前远程通道只有飞书一个正式实现。
 
-- 不安装飞书 SDK
-- 不建立 WebSocket
-- 不读取飞书消息
-- 不自动启动
-- 不改 PC 端现有执行链路
+## 实现文件
 
-## 目标
-
-把“手机端从哪里发命令”和“Pi 怎么执行”解耦。飞书、PWA、局域网、以后可能的其他 IM 都实现同一套通道契约。
-
-```text
-Feishu / PWA / LAN
-        │  RemoteCommand
-        ▼
-  ChannelAdapter
-        │  Pi JSONL
-        ▼
-     PiBridge
-```
-
-## 文件
-
-- `electron/channels/contract.cjs`：命令、消息、状态、能力定义
-- `electron/channels/feishu.cjs`：飞书通道骨架和配置校验
-- `electron/channels/feishu-config.cjs`：本机配置读写（App Secret 用 safeStorage 加密）
-- `electron/channels/index.cjs`：通道注册表
+- `electron/feishu-agent.cjs`：飞书长连接、消息收发、配对、审批和推送
+- `electron/channels/feishu-config.cjs`：本机配置读写
 - `electron/preload.cjs`：`remoteChannels()` 只读状态接口
 - `electron/main.cjs`：`tesT:remote-channels` IPC
+
+飞书通道当前支持：
+
+- 文本消息
+- 审批请求与回答
+- 任务完成推送
+
+尚未支持：
+
+- 卡片消息
+- 文件与图片
+- 已发送消息编辑
+- 本地消息持久化
+
+## 数据流
+
+```text
+Feishu event
+    │
+    ▼
+FeishuAgent
+    │  Pi JSONL
+    ▼
+  PiBridge
+```
+
+PC 端与飞书共用同一个 Pi sidecar。飞书只负责把消息转换成 Pi 命令，并把关键事件回传给用户，不维护第二套会话系统。
 
 ## 可视化配置
 
@@ -59,73 +64,7 @@ App Secret 在 Windows 上通过 Electron `safeStorage`（DPAPI）加密后写�
 
 之后只接受已绑定用户的命令。
 
-## 命令契约
-
-允许的 `type`：
-
-- `prompt`
-- `steer`
-- `follow_up`
-- `abort`
-- `new_session`
-- `switch_session`
-- `set_model`
-- `set_thinking_level`
-- `compact`
-- `get_state`
-- `get_messages`
-- `get_available_models`
-- `get_session_stats`
-
-所有命令统一经过 `normalizeCommand()`：
-
-- 校验类型
-- 补 `id`
-- 补 `source`
-- 校验 `prompt` / `steer` / `follow_up` 的 `message`
-- 校验 `switch_session.sessionPath`
-- 校验 `set_model.provider` / `modelId`
-
-## 消息契约
-
-统一消息信封：
-
-```js
-{
-  id: "msg-...",
-  kind: "text",       // text | markdown | card | file | image | voice | status
-  text: "...",
-  title: "...",
-  replyTo: "...",
-  meta: {}
-}
-```
-
-通道适配器负责把内部事件翻译成自己的消息格式；卡片、按钮、文件等平台差异放在 `meta`。
-
-## 通道能力
-
-`ChannelAdapter.capabilities` 当前包含：
-
-```js
-{
-  text: true,
-  markdown: false,
-  cards: false,
-  buttons: false,
-  files: false,
-  images: false,
-  voice: false,
-  threads: false,
-  typing: false,
-  push: false,
-  editMessage: false
-}
-```
-
-飞书骨架声明支持 `text`、`markdown`、`cards`、`buttons`、`files`、`images`、`push`、`editMessage`，但 `send()` / `update()` 目前抛出 `CHANNEL_NOT_IMPLEMENTED`。
-
-## 飞书配置骨架
+## 配置结构
 
 ```js
 {
@@ -140,22 +79,18 @@ App Secret 在 Windows 上通过 Electron `safeStorage`（DPAPI）加密后写�
 }
 ```
 
-`validateFeishuConfig()` 只做本地校验，不发网络请求。`redactFeishuConfig()` 用于把 `appSecret` 隐藏后再传给 UI。
+凭证校验只发飞书官方请求，不写入对话历史。
 
-## 后续接入时才做
+## 后续计划
 
-1. 安装 `@larksuiteoapi/node-sdk`
-2. 创建飞书自建应用并开启机器人 + 长连接
-3. 把 `im.message.receive_v1` 转成 `RemoteCommand`
-4. 把 `message_update` / `tool_execution_*` 转成飞书卡片更新
-5. 从 `feishu.json` 读取已加密的 `appSecret`
-6. 加允许用户/群白名单
-7. 最后再决定是否做 Windows 服务自启
+1. 把工具执行过程映射成飞书卡片
+2. 支持文件和图片
+3. 支持消息编辑与更细的任务进度
+4. 最后再决定是否做 Windows 服务自启
 
 ## 当前边界
 
 - PC 端仍由用户手动启动 TesT
 - 不做开机自启
-- 不做飞书网络连接
-- 不做消息持久化
-- 不做自动重连
+- 飞书消息不做本地持久化
+- 长连接重连由飞书 SDK 管理，不保证无限重试

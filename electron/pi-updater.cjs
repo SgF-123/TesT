@@ -29,6 +29,30 @@ function readJson(file) {
   }
 }
 
+function currentPointerPath() {
+  return path.join(paths.piKernelRoot(), "current.json");
+}
+
+function rollbackPointerPath() {
+  return path.join(paths.piKernelRoot(), "rollback.json");
+}
+
+function writeRollbackSnapshot() {
+  const previous = readJson(currentPointerPath());
+  fs.writeFileSync(
+    rollbackPointerPath(),
+    `${JSON.stringify(
+      {
+        previous,
+        createdAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
+
 function sourcePackagePath() {
   if (app.isPackaged) {
     return path.join(process.resourcesPath, "pi", "package.json");
@@ -342,12 +366,12 @@ async function install() {
       installedAt: new Date().toISOString(),
       source: "https://registry.npmjs.org",
     };
+    writeRollbackSnapshot();
     fs.writeFileSync(
-      path.join(root, "current.json"),
+      currentPointerPath(),
       `${JSON.stringify(pointer, null, 2)}\n`,
       "utf8",
     );
-    pruneVersions(root);
     publish({
       state: "done",
       latestVersion: version,
@@ -374,8 +398,8 @@ async function install() {
 
 function restore() {
   try {
-    const pointer = path.join(paths.piKernelRoot(), "current.json");
-    fs.rmSync(pointer, { force: true });
+    fs.rmSync(currentPointerPath(), { force: true });
+    fs.rmSync(rollbackPointerPath(), { force: true });
     publish({
       state: "idle",
       latestVersion: "",
@@ -388,27 +412,80 @@ function restore() {
   }
 }
 
+function commit() {
+  try {
+    fs.rmSync(rollbackPointerPath(), { force: true });
+    pruneVersions(paths.piKernelRoot());
+    return { ok: true };
+  } catch (error) {
+    return { error: String(error?.message || error) };
+  }
+}
+
+function rollback() {
+  try {
+    const snapshot = readJson(rollbackPointerPath());
+    if (!snapshot) {
+      return { error: "没有可回退的内核快照" };
+    }
+    const previous = snapshot.previous;
+    const previousCli =
+      previous?.bundleDir &&
+      path.join(String(previous.bundleDir), "cli.js");
+    if (previous && previousCli && fs.existsSync(previousCli)) {
+      fs.writeFileSync(
+        currentPointerPath(),
+        `${JSON.stringify(previous, null, 2)}\n`,
+        "utf8",
+      );
+    } else {
+      fs.rmSync(currentPointerPath(), { force: true });
+    }
+    fs.rmSync(rollbackPointerPath(), { force: true });
+    const version = currentVersion();
+    publish({
+      state: "rolled-back",
+      latestVersion: "",
+      percent: 0,
+      message: previous
+        ? `新内核启动失败，已回退到 Pi ${version}`
+        : `新内核启动失败，已回退到内置 Pi ${version}`,
+    });
+    return { ok: true, currentVersion: version };
+  } catch (error) {
+    return { error: String(error?.message || error) };
+  }
+}
+
 function getStatus() {
   return {
     ...status,
     currentVersion: currentVersion(),
     packageName: PACKAGE_NAME,
+    rollbackPending: fs.existsSync(rollbackPointerPath()),
   };
 }
 
 function init(options = {}) {
   onStatus = options.onStatus || onStatus;
+  const recovered = fs.existsSync(rollbackPointerPath())
+    ? rollback()
+    : null;
   publish({
-    state: "idle",
-    message: "Pi 内核跟随官方 npm 源，可独立更新",
+    state: recovered?.ok ? "rolled-back" : "idle",
+    message: recovered?.ok
+      ? `检测到未完成的内核更新，已回退到 Pi ${recovered.currentVersion}`
+      : "Pi 内核跟随官方 npm 源，可独立更新",
   });
 }
 
 module.exports = {
   check,
+  commit,
   currentVersion,
   getStatus,
   init,
   install,
   restore,
+  rollback,
 };

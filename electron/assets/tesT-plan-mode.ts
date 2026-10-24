@@ -12,6 +12,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const MUTATING_TOOLS = new Set([
   "bash",
+  "powershell",
   "write",
   "edit",
   "delete",

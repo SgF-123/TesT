@@ -105,6 +105,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
     if (
       event.toolName !== "bash" &&
+      event.toolName !== "powershell" &&
       event.toolName !== "exec" &&
       event.toolName !== "shell"
     ) {

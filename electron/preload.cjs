@@ -147,6 +147,18 @@ contextBridge.exposeInMainWorld("tesT", {
     return ipcRenderer.invoke("tesT:read-file", payload);
   },
 
+  deletePath(payload) {
+    return ipcRenderer.invoke("tesT:delete-path", payload);
+  },
+
+  chooseDeleteDirectory(payload) {
+    return ipcRenderer.invoke("tesT:choose-delete-directory", payload);
+  },
+
+  revertToolEdits(payload) {
+    return ipcRenderer.invoke("tesT:revert-tool-edits", payload);
+  },
+
   openPath(payload) {
     return ipcRenderer.invoke("tesT:open-path", payload);
   },
@@ -327,6 +339,18 @@ contextBridge.exposeInMainWorld("tesT", {
     return ipcRenderer.invoke("tesT:set-workspace", payload);
   },
 
+  noteWorkspace(payload) {
+    return ipcRenderer.invoke("tesT:note-workspace", payload);
+  },
+
+  newProjectSession(payload) {
+    return ipcRenderer.invoke("tesT:new-project-session", payload);
+  },
+
+  newScratchSession() {
+    return ipcRenderer.invoke("tesT:new-scratch-session");
+  },
+
   remoteStatus() {
     return ipcRenderer.invoke("tesT:remote-status");
   },
@@ -413,6 +437,10 @@ contextBridge.exposeInMainWorld("tesT", {
 
   installExtension(payload) {
     return ipcRenderer.invoke("tesT:install-extension", payload);
+  },
+
+  installPackage(payload) {
+    return ipcRenderer.invoke("tesT:install-package", payload);
   },
 
   toggleExtension(payload) {

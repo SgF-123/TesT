@@ -217,6 +217,35 @@ interface TesTBridge {
     text?: string;
     error?: string;
   }>;
+  deletePath?: (payload: {
+    cwd?: string;
+    path: string;
+  }) => Promise<{
+    removed?: boolean;
+    type?: "file" | "directory";
+    path?: string;
+    error?: string;
+  }>;
+  chooseDeleteDirectory?: (payload?: {
+    cwd?: string;
+  }) => Promise<{
+    canceled?: boolean;
+    removed?: boolean;
+    type?: "file" | "directory";
+    path?: string;
+    error?: string;
+  }>;
+  revertToolEdits?: (payload: {
+    cwd?: string;
+    operations: Array<{
+      path: string;
+      edits: Array<{ oldText: string; newText: string }>;
+    }>;
+  }) => Promise<{
+    ok?: boolean;
+    files?: string[];
+    error?: string;
+  }>;
   openPath?: (payload: { cwd?: string; path: string }) => Promise<{
     ok?: boolean;
     error?: string;
@@ -477,6 +506,7 @@ interface TesTBridge {
     cwd: string;
     name?: string;
     recent: string[];
+    scratch?: string;
     error?: string;
   }>;
   chooseWorkspace?: () => Promise<{
@@ -490,6 +520,28 @@ interface TesTBridge {
     cwd?: string;
     name?: string;
     recent?: string[];
+    scratch?: string;
+    error?: string;
+  }>;
+  noteWorkspace?: (payload: { cwd: string }) => Promise<{
+    cwd?: string;
+    name?: string;
+    recent?: string[];
+    scratch?: string;
+    error?: string;
+  }>;
+  newProjectSession?: (payload: { cwd: string }) => Promise<{
+    cwd?: string;
+    name?: string;
+    recent?: string[];
+    project?: boolean;
+    error?: string;
+  }>;
+  newScratchSession?: () => Promise<{
+    cwd?: string;
+    name?: string;
+    recent?: string[];
+    scratch?: boolean;
     error?: string;
   }>;
   remoteStatus?: () => Promise<TesTRemoteStatus>;
@@ -549,6 +601,16 @@ interface TesTBridge {
       enabled: boolean;
       scope?: "global" | "project";
       readonly?: boolean;
+      package?: boolean;
+      source?: string;
+      version?: string;
+      installed?: boolean;
+      packageIndex?: number;
+      resources?: {
+        extensions: number;
+        skills: number;
+        prompts: number;
+      };
     }>;
     extensions: Array<{
       kind: string;
@@ -558,6 +620,16 @@ interface TesTBridge {
       enabled: boolean;
       scope?: "global" | "project";
       readonly?: boolean;
+      package?: boolean;
+      source?: string;
+      version?: string;
+      installed?: boolean;
+      packageIndex?: number;
+      resources?: {
+        extensions: number;
+        skills: number;
+        prompts: number;
+      };
     }>;
     project?: {
       cwd: string;
@@ -578,14 +650,28 @@ interface TesTBridge {
     kind: "skill" | "extension";
     path: string;
   }) => Promise<{ name?: string; path?: string; error?: string }>;
+  installPackage?: (payload: {
+    source: string;
+  }) => Promise<{
+    source?: string;
+    output?: string;
+    note?: string;
+    error?: string;
+  }>;
   toggleExtension?: (payload: {
     kind: "skill" | "extension";
     name: string;
     enabled: boolean;
+    package?: boolean;
+    source?: string;
+    scope?: "global" | "project";
   }) => Promise<{ name?: string; path?: string; enabled?: boolean; error?: string }>;
   removeExtension?: (payload: {
     kind: "skill" | "extension";
     name: string;
+    package?: boolean;
+    source?: string;
+    scope?: "global" | "project";
   }) => Promise<{ removed?: boolean; path?: string; error?: string }>;
   openExtensionsFolder?: (payload: {
     kind: "skill" | "extension";
@@ -644,6 +730,8 @@ interface TesTBridge {
     error?: string;
     version?: string;
     bundleDir?: string;
+    rolledBack?: boolean;
+    currentVersion?: string;
   }>;
   restorePiKernel?: () => Promise<{
     ok?: boolean;

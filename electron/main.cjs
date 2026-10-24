@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const crypto = require("node:crypto");
 const path = require("node:path");
+const { execFile } = require("node:child_process");
 const {
   app,
   BrowserWindow,
@@ -28,7 +29,6 @@ const extensions = require("./extensions.cjs");
 const updater = require("./updater.cjs");
 const piUpdater = require("./pi-updater.cjs");
 const { RemoteServer } = require("./remote-server.cjs");
-const channels = require("./channels/index.cjs");
 const feishuConfig = require("./channels/feishu-config.cjs");
 const { FeishuAgent } = require("./feishu-agent.cjs");
 const git = require("./git.cjs");
@@ -169,6 +169,7 @@ log(
 
 let window = null;
 let bridge = null;
+let bridgeRestartTimer = null;
 let rendererReady = false;
 let pending = [];
 let drag = null;
@@ -185,6 +186,7 @@ let recordQueue = [];
 let recordTimer = null;
 let sessionWatcher = null;
 let sessionWatchTimer = null;
+let rendererCrashTimes = [];
 
 function log(message) {
   try {
@@ -311,6 +313,7 @@ function workspacePayload() {
     cwd: workspaceCwd,
     name: workspaceName(workspaceCwd),
     recent: recentWorkspaces,
+    scratch: path.join(paths.dataDir(), "不在项目"),
   };
 }
 
@@ -450,7 +453,7 @@ function initWorkspace() {
   log(`workspace:init ${workspaceCwd}`);
 }
 
-function setWorkspace(target) {
+function setWorkspace(target, options = {}) {
   const resolved = normalizeWorkspace(target);
   if (!isDirectory(resolved)) {
     return { error: "目录不存在或不可访问" };
@@ -460,13 +463,15 @@ function setWorkspace(target) {
     !workspaceCwd ||
     resolved.toLowerCase() !== workspaceCwd.toLowerCase();
   workspaceCwd = resolved;
-  recentWorkspaces = [
-    resolved,
-    ...recentWorkspaces.filter(
-      (item) => item.toLowerCase() !== resolved.toLowerCase(),
-    ),
-  ].slice(0, 8);
-  writeWorkspaceStore();
+  if (!options.transient) {
+    recentWorkspaces = [
+      resolved,
+      ...recentWorkspaces.filter(
+        (item) => item.toLowerCase() !== resolved.toLowerCase(),
+      ),
+    ].slice(0, 8);
+    writeWorkspaceStore();
+  }
 
   if (changed) {
     if (bridge) {
@@ -481,6 +486,25 @@ function setWorkspace(target) {
     log(`workspace:set ${resolved}`);
   }
 
+  return workspacePayload();
+}
+
+function noteWorkspace(target) {
+  const resolved = normalizeWorkspace(target);
+  if (!isDirectory(resolved)) {
+    return { error: "目录不存在或不可访问" };
+  }
+  workspaceCwd = resolved;
+  const scratch = path.join(paths.dataDir(), "不在项目");
+  if (resolved.toLowerCase() !== scratch.toLowerCase()) {
+    recentWorkspaces = [
+      resolved,
+      ...recentWorkspaces.filter(
+        (item) => item.toLowerCase() !== resolved.toLowerCase(),
+      ),
+    ].slice(0, 8);
+    writeWorkspaceStore();
+  }
   return workspacePayload();
 }
 
@@ -1181,6 +1205,9 @@ function createWindow() {
   });
 
   const query = { shell: "1" };
+  if (process.argv.includes("--dark") || process.argv.includes("--light")) {
+    query.theme = process.argv.includes("--dark") ? "dark" : "light";
+  }
   if (shouldCaptureSettings) {
     query.settings = "1";
     query.tab = "models";
@@ -1411,7 +1438,11 @@ async function captureWindow() {
 }
 
 function installBundledExtensions() {
-  const names = ["tesT-plan-mode", "tesT-permission-gate"];
+  const names = [
+    "tesT-plan-mode",
+    "tesT-permission-gate",
+    "tesT-runtime",
+  ];
   for (const name of names) {
     try {
       const source = path.join(__dirname, "assets", `${name}.ts`);
@@ -1503,6 +1534,412 @@ function startBridge() {
   log("pi:started");
 }
 
+function restartBridgeWithCurrentKernel() {
+  return new Promise((resolve) => {
+    if (bridgeRestartTimer) {
+      clearTimeout(bridgeRestartTimer);
+    }
+    const previous = bridge;
+    bridge = null;
+    try {
+      previous?.stop();
+    } catch {
+      // The old process may already be gone.
+    }
+    bridgeRestartTimer = setTimeout(async () => {
+      bridgeRestartTimer = null;
+      if (!bridge) {
+        startBridge();
+      }
+      const candidate = bridge;
+      if (!candidate) {
+        resolve(false);
+        return;
+      }
+      const probeId = `kernel-health-${Date.now()}`;
+      const responsePromise = candidate.waitForResponse(probeId, 14000);
+      const sent = await candidate.sendWhenReady(
+        { id: probeId, type: "get_state" },
+        10000,
+      );
+      if (!sent) {
+        candidate.rejectResponseWaiters();
+        resolve(false);
+        return;
+      }
+      const response = await responsePromise;
+      resolve(
+        response?.success === true &&
+          candidate === bridge &&
+          Boolean(candidate.child),
+      );
+    }, 300);
+  });
+}
+
+function packageCommandCwd() {
+  return (
+    workspaceCwd ||
+    (app.isPackaged ? app.getPath("home") : paths.projectRoot())
+  );
+}
+
+function stripSourceQuotes(value) {
+  let source = String(value || "")
+    .replace(/^\uFEFF/, "")
+    .trim();
+  if (!source) {
+    return "";
+  }
+
+  source = source
+    .replace(/^(?:PS\s+[^>\r\n]*>|>)\s*/i, "")
+    .trim();
+  if (
+    source.length >= 2 &&
+    source.startsWith("`") &&
+    source.endsWith("`")
+  ) {
+    source = source.slice(1, -1).trim();
+  }
+  if (
+    source.length >= 2 &&
+    source.startsWith("<") &&
+    source.endsWith(">")
+  ) {
+    source = source.slice(1, -1).trim();
+  }
+  if (source.length < 2) {
+    return source;
+  }
+  const first = source[0];
+  const last = source[source.length - 1];
+  return (first === '"' && last === '"') ||
+    (first === "'" && last === "'")
+    ? source.slice(1, -1).trim()
+    : source;
+}
+
+function packageSpecFromNpmCommand(value) {
+  const source = String(value || "").trim();
+  const command = source.match(/^(?:npm|pnpm|yarn|bun)\s+([\s\S]*)$/i);
+  if (!command) {
+    return null;
+  }
+
+  const tokens = (command[1].match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [])
+    .map(stripSourceQuotes)
+    .filter(Boolean);
+  const installIndex = tokens.findIndex((token) =>
+    /^(?:i|install|add)$/i.test(token),
+  );
+  if (installIndex < 0) {
+    return null;
+  }
+
+  const optionsWithValue = new Set([
+    "--cache",
+    "--include",
+    "--omit",
+    "--prefix",
+    "--registry",
+    "--tag",
+    "--workspace",
+    "-w",
+  ]);
+  const specs = [];
+  const args = tokens.slice(installIndex + 1);
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === "--") {
+      continue;
+    }
+    if (token.startsWith("-")) {
+      if (
+        !token.includes("=") &&
+        optionsWithValue.has(token) &&
+        index + 1 < args.length
+      ) {
+        index += 1;
+      }
+      continue;
+    }
+    specs.push(token);
+  }
+  if (specs.length === 0) {
+    throw new Error(
+      "请在 npm 命令后面写明要安装的包名，例如 npm i pi-hermes-memory。",
+    );
+  }
+  if (specs.length > 1) {
+    throw new Error("一次只能安装一个 Pi 包，请去掉多余的包名。");
+  }
+  return specs[0];
+}
+
+function normalizePackageSource(value) {
+  let source = stripSourceQuotes(value);
+  if (!source) {
+    return "";
+  }
+
+  const commandSpec = packageSpecFromNpmCommand(source);
+  if (commandSpec !== null) {
+    source = commandSpec;
+  }
+
+  const npmPage = source.match(
+    /^https?:\/\/(?:www\.)?npmjs\.(?:com|org)\/package\/(@[^/?#]+\/[^/?#]+|[^/?#]+)(?:\/v\/([^/?#]+))?/i,
+  );
+  if (npmPage) {
+    const name = decodeURIComponent(npmPage[1]);
+    const version = npmPage[2] ? decodeURIComponent(npmPage[2]) : "";
+    return `npm:${name}${version ? `@${version}` : ""}`;
+  }
+
+  const registryPage = source.match(
+    /^https?:\/\/registry\.(?:npmjs\.org|npmmirror\.com)\/([^?#]+)/i,
+  );
+  if (registryPage) {
+    const pathParts = decodeURIComponent(registryPage[1])
+      .replace(/^\/+|\/+$/g, "")
+      .split("/")
+      .filter(Boolean);
+    let name = pathParts[0] || "";
+    let version = "";
+    if (name.startsWith("@") && pathParts.length >= 2) {
+      name = `${name}/${pathParts[1]}`;
+      version = pathParts[2] || "";
+    } else {
+      version = pathParts[1] || "";
+    }
+    if (name && !name.startsWith("-") && !/^[-.]/.test(version)) {
+      return `npm:${name}${version ? `@${version}` : ""}`;
+    }
+  }
+
+  if (/^git\+/i.test(source)) {
+    source = source.slice(4);
+  }
+  if (/^github:/i.test(source)) {
+    source = `git:github.com/${source.slice("github:".length).replace(/^\/+/, "")}`;
+  }
+  if (/^github\.com\//i.test(source)) {
+    source = `git:${source}`;
+  }
+  if (/^git@/i.test(source)) {
+    source = `git:${source}`;
+  }
+  if (/^npm:/i.test(source)) {
+    return `npm:${stripSourceQuotes(source.slice(4))}`;
+  }
+
+  const npmSpec = source.match(
+    /^(?:@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*|[a-z0-9][a-z0-9._~-]*)(?:@[^\s/]+)?$/i,
+  );
+  if (npmSpec) {
+    return `npm:${source}`;
+  }
+  return source;
+}
+
+function compactPackageError(value) {
+  const text = String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .trim();
+  if (!text) {
+    return "";
+  }
+
+  const lines = text
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim());
+  const interesting = lines.filter((line) =>
+    /(?:npm (?:error|err!)|error:|err!|not found|notarget|enoent|eacces|eperm|e404|eresolve|eintegrity|ebusy|etimedout|econn|enotfound|eai_again|node-gyp|gyp err!|better-sqlite3|prebuild-install|permission denied|operation not permitted)/i.test(
+      line,
+    ),
+  );
+  let detail = (interesting.length ? interesting : lines).slice(-16).join("\n");
+  if (detail.length > 2200) {
+    detail = `…\n${detail.slice(-2200)}`;
+  }
+  return detail;
+}
+
+function formatPackageInstallError(error) {
+  const raw = String(error?.message || error || "").trim();
+  const lower = raw.toLowerCase();
+  let title = "安装失败，请查看 npm 输出后重试。";
+
+  if (/e404|404 not found|is not in this registry|notarget/.test(lower)) {
+    title = "npm 上找不到这个包或版本，请检查包名和版本号。";
+  } else if (
+    /eacces|eperm/.test(lower) &&
+    /(?:npm|_cacache|node_cache|cache)/.test(lower)
+  ) {
+    title =
+      "npm 无法写入缓存目录，请检查磁盘空间和 npm 缓存目录权限。";
+  } else if (
+    /eintegrity/.test(lower)
+  ) {
+    title = "npm 缓存内容损坏，请清理 npm 缓存后重试。";
+  } else if (
+    /enospc|ebusy|resource busy|being used by another process/.test(lower)
+  ) {
+    title = "安装文件正被其他程序占用，请关闭相关程序后重试。";
+  } else if (
+    /etimedout|econnreset|econnrefused|enotfound|eai_again|fetch failed|network/.test(
+      lower,
+    )
+  ) {
+    title = "连接 npm 源失败，请检查网络或代理设置后重试。";
+  } else if (
+    /node-gyp|gyp err!|better-sqlite3|prebuild-install/.test(lower)
+  ) {
+    title =
+      "插件的原生依赖构建失败，可能需要重新安装 Node.js 构建工具。";
+  } else if (/eresolve|peer dep|conflicting peer/.test(lower)) {
+    title = "插件依赖版本冲突，无法完成安装。";
+  }
+
+  const detail = compactPackageError(raw);
+  return detail ? `${title}\n\n${detail}` : title;
+}
+
+function sourceNeedsGit(source) {
+  if (/^(git:|ssh:\/\/|git@)/i.test(source)) {
+    return true;
+  }
+  return /^https?:\/\//i.test(source) && !/npmjs\./i.test(source);
+}
+
+function commandAvailable(command, args = ["--version"]) {
+  return new Promise((resolve) => {
+    execFile(
+      command,
+      args,
+      { windowsHide: true, timeout: 5000 },
+      (error) => resolve(!error),
+    );
+  });
+}
+
+function githubRepoFromSource(source) {
+  let raw = String(source || "").trim();
+  if (raw.startsWith("git:")) {
+    raw = raw.slice(4).trim();
+  }
+  if (raw.startsWith("git@")) {
+    const match = raw.match(/^git@github\.com:(.+)$/i);
+    if (!match) {
+      return null;
+    }
+    raw = match[1];
+  } else {
+    try {
+      const parsed = new URL(raw);
+      if (!/^github\.com$/i.test(parsed.hostname)) {
+        return null;
+      }
+      raw = parsed.pathname.replace(/^\/+/, "");
+    } catch {
+      if (!/^github\.com\//i.test(raw)) {
+        return null;
+      }
+      raw = raw.slice("github.com/".length);
+    }
+  }
+
+  const repoPath = raw.replace(/\.git$/i, "").replace(/\/+$/, "");
+  const [owner, repo] = repoPath.split("/");
+  return owner && repo ? { owner, repo } : null;
+}
+
+async function npmSourceForGithub(source) {
+  const repoInfo = githubRepoFromSource(source);
+  if (!repoInfo) {
+    return "";
+  }
+
+  try {
+    const response = await fetch(
+      `https://registry.npmjs.org/${encodeURIComponent(repoInfo.repo)}`,
+      {
+        headers: { accept: "application/json" },
+        signal: AbortSignal.timeout(8000),
+      },
+    );
+    if (!response.ok) {
+      return "";
+    }
+    const data = await response.json();
+    const latest = String(data?.["dist-tags"]?.latest || "");
+    const version = latest ? data?.versions?.[latest] : null;
+    const repository =
+      version?.repository?.url ||
+      data?.repository?.url ||
+      "";
+    const normalized = String(repository)
+      .replace(/^git\+/i, "")
+      .replace(/^git@github\.com:/i, "")
+      .replace(/^https?:\/\/github\.com\//i, "")
+      .replace(/\.git$/i, "")
+      .toLowerCase();
+    const expected =
+      `${repoInfo.owner}/${repoInfo.repo}`.toLowerCase();
+    if (!data?.name || !normalized.includes(expected)) {
+      return "";
+    }
+    return `npm:${data.name}${latest ? `@${latest}` : ""}`;
+  } catch {
+    return "";
+  }
+}
+
+function runPiPackageCommand(args) {
+  return new Promise((resolve, reject) => {
+    const cli = paths.piCli();
+    if (!fs.existsSync(cli)) {
+      reject(new Error(`Pi CLI 不存在：${cli}`));
+      return;
+    }
+
+    const vendorPath = path.resolve(cli, "..", "..", "vendor");
+    const env = {
+      ...process.env,
+      PI_CODING_AGENT_DIR: paths.piDataDir(),
+      PI_SKIP_VERSION_CHECK: "1",
+      NO_COLOR: "1",
+      NODE_PATH: [vendorPath, process.env.NODE_PATH]
+        .filter(Boolean)
+        .join(path.delimiter),
+    };
+
+    execFile(
+      paths.nodeExe(),
+      [cli, ...args],
+      {
+        cwd: packageCommandCwd(),
+        env,
+        windowsHide: true,
+        timeout: 10 * 60 * 1000,
+        maxBuffer: 8 * 1024 * 1024,
+      },
+      (error, stdout, stderr) => {
+        const output = String(stdout || "").trim();
+        const errors = String(stderr || "").trim();
+        if (error) {
+          const detail = [errors, output].filter(Boolean).join("\n");
+          reject(new Error(detail || error.message));
+          return;
+        }
+        resolve({ output, stderr: errors });
+      },
+    );
+  });
+}
+
 function ensureBridge() {
   if (!bridge) {
     startBridge();
@@ -1555,6 +1992,82 @@ function registerIpc() {
   ipcMain.handle("tesT:set-workspace", (_event, payload) =>
     setWorkspace(payload?.cwd),
   );
+
+  ipcMain.handle("tesT:note-workspace", (_event, payload) =>
+    noteWorkspace(payload?.cwd),
+  );
+
+  ipcMain.handle("tesT:new-project-session", async (_event, payload) => {
+    try {
+      const target = String(payload?.cwd || "");
+      if (!target) {
+        return { error: "缺少项目目录" };
+      }
+      const wasCurrent =
+        workspaceCwd &&
+        normalizeWorkspace(workspaceCwd).toLowerCase() ===
+          normalizeWorkspace(target).toLowerCase();
+      const result = setWorkspace(target);
+      if (result?.error) {
+        return result;
+      }
+      const sent = bridge
+        ? await bridge.sendWhenReady(
+            wasCurrent
+              ? {
+                  id: `new-project-${Date.now()}`,
+                  type: "new_session",
+                }
+              : {
+                  id: `project-ready-${Date.now()}`,
+                  type: "get_state",
+                },
+            10000,
+          )
+        : false;
+      if (!sent) {
+        return { error: "项目会话启动超时，请重试" };
+      }
+      return { ...result, project: true };
+    } catch (error) {
+      return { error: String(error?.message || error) };
+    }
+  });
+
+  ipcMain.handle("tesT:new-scratch-session", async () => {
+    try {
+      const scratch = path.join(paths.dataDir(), "不在项目");
+      fs.mkdirSync(scratch, { recursive: true });
+      const wasScratch =
+        workspaceCwd &&
+        normalizeWorkspace(workspaceCwd).toLowerCase() ===
+          normalizeWorkspace(scratch).toLowerCase();
+      const result = setWorkspace(scratch, { transient: true });
+      if (result?.error) {
+        return result;
+      }
+      const sent = bridge
+        ? await bridge.sendWhenReady(
+            wasScratch
+              ? {
+                  id: `new-scratch-${Date.now()}`,
+                  type: "new_session",
+                }
+              : {
+                  id: `scratch-ready-${Date.now()}`,
+                  type: "get_state",
+                },
+            10000,
+          )
+        : false;
+      if (!sent) {
+        return { error: "临时会话启动超时，请重试" };
+      }
+      return { ...result, scratch: true };
+    } catch (error) {
+      return { error: String(error?.message || error) };
+    }
+  });
 
   ipcMain.handle("tesT:remote-status", () => remoteStatus());
 
@@ -1648,15 +2161,7 @@ function registerIpc() {
   });
 
   ipcMain.handle("tesT:remote-channels", () => {
-    const list = channels.listStatuses();
-    if (!feishuAgent) {
-      return list;
-    }
-    const status = feishuAgent.status();
-    const found = list.some((item) => item.id === "feishu");
-    return found
-      ? list.map((item) => (item.id === "feishu" ? status : item))
-      : [status, ...list];
+    return feishuAgent ? [feishuAgent.status()] : [];
   });
 
   ipcMain.handle("tesT:feishu-config", () => feishuConfig.readForRenderer());
@@ -2106,6 +2611,78 @@ function registerIpc() {
     }
   });
 
+  ipcMain.handle("tesT:delete-path", (_event, payload) => {
+    try {
+      return files.removePath(
+        payload?.cwd || workspaceCwd,
+        payload?.path,
+      );
+    } catch (error) {
+      return { error: String(error?.message || error) };
+    }
+  });
+
+  ipcMain.handle("tesT:revert-tool-edits", (_event, payload) => {
+    try {
+      return files.revertEdits(
+        payload?.cwd || workspaceCwd,
+        payload?.operations,
+      );
+    } catch (error) {
+      return { error: String(error?.message || error) };
+    }
+  });
+
+  ipcMain.handle(
+    "tesT:choose-delete-directory",
+    async (_event, payload) => {
+      try {
+        const cwd = payload?.cwd || workspaceCwd;
+        if (!cwd) {
+          return { error: "缺少当前工作区路径" };
+        }
+        const root = path.resolve(cwd);
+        const picked = await dialog.showOpenDialog(window, {
+          title: "选择要删除的文件夹",
+          defaultPath: root,
+          properties: ["openDirectory"],
+        });
+        if (picked.canceled || !picked.filePaths[0]) {
+          return { canceled: true };
+        }
+
+        const absolute = path.resolve(picked.filePaths[0]);
+        const relative = path.relative(root, absolute);
+        if (
+          !relative ||
+          relative.startsWith("..") ||
+          path.isAbsolute(relative)
+        ) {
+          return {
+            error: "只能删除当前工作区内的子文件夹，不能删除工作区根目录",
+          };
+        }
+
+        const confirmation = await dialog.showMessageBox(window, {
+          type: "warning",
+          title: "删除文件夹",
+          message: "永久删除这个文件夹？",
+          detail: `${absolute}\n\n文件夹内的所有内容都会被删除，此操作不可撤销。`,
+          buttons: ["取消", "删除"],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+        });
+        if (confirmation.response !== 1) {
+          return { canceled: true };
+        }
+        return files.removePath(root, relative);
+      } catch (error) {
+        return { error: String(error?.message || error) };
+      }
+    },
+  );
+
   ipcMain.handle("tesT:open-path", async (_event, payload) => {
     try {
       const root = path.resolve(payload?.cwd || workspaceCwd || "");
@@ -2551,8 +3128,57 @@ function registerIpc() {
     }
   });
 
+  ipcMain.handle("tesT:install-package", async (_event, payload) => {
+    try {
+      let source = normalizePackageSource(payload?.source);
+      if (
+        !/^(npm:|git:|https?:\/\/|ssh:\/\/|git@)/i.test(source)
+      ) {
+        throw new Error(
+          `无法识别安装源“${String(payload?.source || "").trim()}”。请直接输入包名（如 pi-hermes-memory）、npm:包名、npmjs 包链接，或 Git 地址。`,
+        );
+      }
+
+      let note = "";
+      if (sourceNeedsGit(source)) {
+        const gitInstalled = await commandAvailable("git");
+        if (!gitInstalled) {
+          const npmSource = await npmSourceForGithub(source);
+          if (npmSource) {
+            source = npmSource;
+            note = "未检测到 Git，已自动改用对应的 npm 包";
+          } else {
+            throw new Error(
+              "这个链接需要 Git，但电脑上没有检测到 Git。普通用户请改用 npmjs 包链接，例如 https://www.npmjs.com/package/包名；开发者可安装 Git for Windows 后重试。",
+            );
+          }
+        }
+      }
+      let result;
+      try {
+        result = await runPiPackageCommand(["install", source]);
+      } catch (error) {
+        throw new Error(formatPackageInstallError(error));
+      }
+      bridge?.restart();
+      return { source, output: result.output, note, error: null };
+    } catch (error) {
+      return { error: String(error?.message || error) };
+    }
+  });
+
   ipcMain.handle("tesT:toggle-extension", (_event, payload) => {
     try {
+      if (payload?.package) {
+        const result = extensions.setPackageEnabled(
+          workspaceCwd,
+          payload?.scope === "project" ? "project" : "global",
+          payload?.source,
+          Boolean(payload?.enabled),
+        );
+        bridge?.restart();
+        return { ...result, error: null };
+      }
       const result = extensions.toggle(
         payload?.kind,
         payload?.name,
@@ -2565,8 +3191,17 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle("tesT:remove-extension", (_event, payload) => {
+  ipcMain.handle("tesT:remove-extension", async (_event, payload) => {
     try {
+      if (payload?.package) {
+        const source = String(payload?.source || "").trim();
+        if (!source) {
+          throw new Error("缺少 package source");
+        }
+        await runPiPackageCommand(["remove", source]);
+        bridge?.restart();
+        return { removed: true, source, error: null };
+      }
       const result = extensions.remove(payload?.kind, payload?.name);
       bridge?.restart();
       return { ...result, error: null };
@@ -2623,18 +3258,41 @@ function registerIpc() {
 
   ipcMain.handle("tesT:pi-install-update", async () => {
     const result = await piUpdater.install();
-    if (!result?.error) {
-      bridge?.restart();
+    if (result?.error) {
+      return result;
     }
-    return result;
+    const healthy = await restartBridgeWithCurrentKernel();
+    if (healthy) {
+      piUpdater.commit();
+      return result;
+    }
+    const rolledBack = piUpdater.rollback();
+    if (rolledBack?.error) {
+      return {
+        ...result,
+        error: `Pi ${result.version || ""} 启动失败，自动回退也失败：${rolledBack.error}`,
+      };
+    }
+    const restored = await restartBridgeWithCurrentKernel();
+    return {
+      ...result,
+      rolledBack: true,
+      currentVersion: rolledBack.currentVersion,
+      error: restored
+        ? `Pi ${result.version || ""} 启动失败，已自动回退到 ${rolledBack.currentVersion}`
+        : `Pi ${result.version || ""} 启动失败；已回退到 ${rolledBack.currentVersion}，但内核未能重新启动`,
+    };
   });
 
-  ipcMain.handle("tesT:pi-restore-kernel", () => {
+  ipcMain.handle("tesT:pi-restore-kernel", async () => {
     const result = piUpdater.restore();
-    if (!result?.error) {
-      bridge?.restart();
+    if (result?.error) {
+      return result;
     }
-    return result;
+    const healthy = await restartBridgeWithCurrentKernel();
+    return healthy
+      ? result
+      : { ...result, error: "内置 Pi 内核未能正常启动" };
   });
 
   ipcMain.handle("tesT:login-start", async (_event, payload) => {
@@ -2939,10 +3597,27 @@ if (!gotLock) {
     showWindow();
   });
 
-  app.on("render-process-gone", (_event, _contents, details) => {
+  app.on("render-process-gone", (_event, contents, details) => {
     log(
       `render-process-gone reason=${details?.reason} exitCode=${details?.exitCode}`,
     );
+    if (isQuitting || !contents || contents.isDestroyed()) {
+      return;
+    }
+    const now = Date.now();
+    rendererCrashTimes = rendererCrashTimes.filter(
+      (timestamp) => now - timestamp < 60_000,
+    );
+    rendererCrashTimes.push(now);
+    if (rendererCrashTimes.length > 3) {
+      log("render-process-gone crash-loop; automatic reload paused");
+      return;
+    }
+    setTimeout(() => {
+      if (!isQuitting && !contents.isDestroyed()) {
+        contents.reload();
+      }
+    }, 900);
   });
 
   app.on("child-process-gone", (_event, details) => {

@@ -172,4 +172,115 @@ function readFile(cwd, relativePath) {
   };
 }
 
-module.exports = { listFiles, readFile };
+function removePath(cwd, relativePath) {
+  if (!cwd || !relativePath) {
+    return { error: "缺少要删除的路径" };
+  }
+  const root = path.resolve(cwd);
+  const absolute = path.resolve(root, relativePath);
+  if (!within(root, absolute) || absolute === root) {
+    return { error: "只能删除当前工作区内的文件或文件夹，且不能删除工作区根目录" };
+  }
+
+  let stat;
+  try {
+    stat = fs.lstatSync(absolute);
+  } catch {
+    return { error: "文件或文件夹不存在" };
+  }
+
+  try {
+    if (stat.isDirectory()) {
+      fs.rmSync(absolute, { recursive: true, force: false });
+      return {
+        removed: true,
+        type: "directory",
+        path: path.relative(root, absolute).replace(/\\/g, "/"),
+      };
+    }
+    fs.unlinkSync(absolute);
+    return {
+      removed: true,
+      type: "file",
+      path: path.relative(root, absolute).replace(/\\/g, "/"),
+    };
+  } catch (error) {
+    return { error: String(error?.message || error) };
+  }
+}
+
+function revertEdits(cwd, operations) {
+  if (!cwd || !Array.isArray(operations) || operations.length === 0) {
+    return { error: "没有可撤销的编辑记录" };
+  }
+  const root = path.resolve(cwd);
+  const working = new Map();
+  const backups = new Map();
+  const touched = new Set();
+
+  try {
+    for (let index = operations.length - 1; index >= 0; index -= 1) {
+      const operation = operations[index];
+      const relativePath = String(operation?.path || "");
+      const edits = Array.isArray(operation?.edits) ? operation.edits : [];
+      if (!relativePath || edits.length === 0) {
+        throw new Error("编辑记录不完整");
+      }
+
+      const absolute = path.resolve(root, relativePath);
+      if (!within(root, absolute) || absolute === root) {
+        throw new Error("编辑路径不在当前工作区内");
+      }
+      if (!backups.has(absolute)) {
+        const original = fs.readFileSync(absolute, "utf8");
+        backups.set(absolute, original);
+        working.set(absolute, original);
+      }
+
+      let content = working.get(absolute);
+      const eol = content.includes("\r\n") ? "\r\n" : "\n";
+      let normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+      for (let editIndex = edits.length - 1; editIndex >= 0; editIndex -= 1) {
+        const edit = edits[editIndex];
+        if (
+          !edit ||
+          typeof edit.oldText !== "string" ||
+          typeof edit.newText !== "string" ||
+          !edit.newText
+        ) {
+          throw new Error("编辑记录缺少可撤销的文本");
+        }
+        const nextText = edit.newText
+          .replace(/\r\n/g, "\n")
+          .replace(/\r/g, "\n");
+        const oldText = edit.oldText
+          .replace(/\r\n/g, "\n")
+          .replace(/\r/g, "\n");
+        if (!normalized.includes(nextText)) {
+          throw new Error(
+            `文件内容已变化，无法安全撤销：${relativePath}`,
+          );
+        }
+        normalized = normalized.replace(nextText, oldText);
+      }
+
+      content = normalized.replace(/\n/g, eol);
+      working.set(absolute, content);
+      fs.writeFileSync(absolute, content, "utf8");
+      touched.add(path.relative(root, absolute).replace(/\\/g, "/"));
+    }
+    return { ok: true, files: Array.from(touched) };
+  } catch (error) {
+    for (const [absolute, original] of backups) {
+      try {
+        fs.writeFileSync(absolute, original, "utf8");
+      } catch {
+        // Keep the most useful error; restore the files we can.
+      }
+    }
+    return { error: String(error?.message || error) };
+  }
+}
+
+module.exports = { listFiles, readFile, removePath, revertEdits };

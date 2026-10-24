@@ -1,6 +1,6 @@
 import { memo, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, FolderOpen } from "lucide-react";
 
 function openExternal(url: string) {
   if (!url) {
@@ -13,10 +13,89 @@ function openExternal(url: string) {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
-function renderInline(text: string, prefix: string): ReactNode[] {
+function pathWithoutLineSuffix(path: string) {
+  return path.replace(/:\d+(?::\d+)?$/, "");
+}
+
+function isPathLike(value: string) {
+  const path = pathWithoutLineSuffix(value.trim());
+  const posixRoot =
+    /^\/(?:Users|home|tmp|var|opt|mnt|workspace|private|Volumes|root|etc)\//.test(
+      path,
+    );
+  return (
+    /^[A-Za-z]:[\\/]/.test(path) ||
+    path.startsWith("\\\\") ||
+    path.startsWith("~/") ||
+    posixRoot ||
+    /^\.{1,2}\/[^\s]+/.test(path)
+  );
+}
+
+function PathToken({
+  path,
+  cwd,
+  code,
+}: {
+  path: string;
+  cwd?: string;
+  code?: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+  const cleanPath = pathWithoutLineSuffix(path);
+  const content = code ? <code>{path}</code> : <span>{path}</span>;
+
+  const copyPath = async () => {
+    try {
+      await navigator.clipboard.writeText(cleanPath);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // Keep copy failures silent in read-only messages.
+    }
+  };
+
+  return (
+    <span className={`md-path ${code ? "is-code" : ""}`}>
+      {content}
+      <span className="md-path-actions">
+        <button
+          type="button"
+          title="打开所在目录"
+          aria-label="打开所在目录"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void window.tesT?.revealPath?.({ cwd, path: cleanPath });
+          }}
+        >
+          <FolderOpen size={10} />
+        </button>
+        <button
+          type="button"
+          title="复制路径"
+          aria-label="复制路径"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void copyPath();
+          }}
+        >
+          {copied ? <Check size={10} /> : <Copy size={10} />}
+        </button>
+      </span>
+    </span>
+  );
+}
+
+function renderInline(
+  text: string,
+  prefix: string,
+  cwd?: string,
+): ReactNode[] {
   const nodes: ReactNode[] = [];
   const pattern =
-    /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_|\[[^\]]+\]\((?:https?:\/\/|\/)[^)\s]+\)|https?:\/\/[^\s<]+)/g;
+    /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_|\[[^\]]+\]\((?:https?:\/\/|\/)[^)\s]+\)|https?:\/\/[^\s<]+|(?<![\w])[A-Za-z]:[\\/][^\s`<>"|?*]+|\\\\[^\s`<>"|?*]+)/g;
   let last = 0;
   let match: RegExpExecArray | null;
   let index = 0;
@@ -27,10 +106,15 @@ function renderInline(text: string, prefix: string): ReactNode[] {
     const token = match[0];
     const key = `${prefix}-i-${index++}`;
     if (token.startsWith("`") && token.endsWith("`")) {
+      const value = token.slice(1, -1);
       nodes.push(
-        <code className="md-inline-code" key={key}>
-          {token.slice(1, -1)}
-        </code>,
+        isPathLike(value) ? (
+          <PathToken key={key} path={value} cwd={cwd} code />
+        ) : (
+          <code className="md-inline-code" key={key}>
+            {value}
+          </code>
+        ),
       );
     } else if (
       (token.startsWith("**") && token.endsWith("**")) ||
@@ -61,6 +145,8 @@ function renderInline(text: string, prefix: string): ReactNode[] {
       } else {
         nodes.push(token);
       }
+    } else if (isPathLike(token)) {
+      nodes.push(<PathToken key={key} path={token} cwd={cwd} />);
     } else {
       nodes.push(
         <a
@@ -282,7 +368,13 @@ function isBlockStart(line: string) {
   );
 }
 
-export default memo(function MarkdownText({ text }: { text: string }) {
+export default memo(function MarkdownText({
+  text,
+  cwd,
+}: {
+  text: string;
+  cwd?: string;
+}) {
   const blocks = useMemo(() => {
     const lines = String(text || "").split(/\r?\n/);
     const blocks: ReactNode[] = [];
@@ -322,6 +414,7 @@ export default memo(function MarkdownText({ text }: { text: string }) {
       const content = renderInline(
         heading[2],
         `h-${index}`,
+        cwd,
       );
       if (level === 1) {
         blocks.push(<h1 key={`h-${index}`}>{content}</h1>);
@@ -348,7 +441,7 @@ export default memo(function MarkdownText({ text }: { text: string }) {
       }
       blocks.push(
         <blockquote key={`q-${index}`}>
-          {renderInline(body.join(" "), `q-${index}`)}
+          {renderInline(body.join(" "), `q-${index}`, cwd)}
         </blockquote>,
       );
       continue;
@@ -364,7 +457,7 @@ export default memo(function MarkdownText({ text }: { text: string }) {
         <ul key={`ul-${index}`}>
           {items.map((item, itemIndex) => (
             <li key={`li-${index}-${itemIndex}`}>
-              {renderInline(item, `li-${index}-${itemIndex}`)}
+              {renderInline(item, `li-${index}-${itemIndex}`, cwd)}
             </li>
           ))}
         </ul>,
@@ -382,7 +475,7 @@ export default memo(function MarkdownText({ text }: { text: string }) {
         <ol key={`ol-${index}`}>
           {items.map((item, itemIndex) => (
             <li key={`oli-${index}-${itemIndex}`}>
-              {renderInline(item, `oli-${index}-${itemIndex}`)}
+              {renderInline(item, `oli-${index}-${itemIndex}`, cwd)}
             </li>
           ))}
         </ol>,
@@ -402,7 +495,7 @@ export default memo(function MarkdownText({ text }: { text: string }) {
     if (paragraph.length > 0) {
       blocks.push(
         <p key={`p-${index}`}>
-          {renderInline(paragraph.join("\n"), `p-${index}`)}
+          {renderInline(paragraph.join("\n"), `p-${index}`, cwd)}
         </p>,
       );
     } else {

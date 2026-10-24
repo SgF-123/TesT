@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const readline = require("node:readline");
 const { spawn } = require("node:child_process");
+const { prepareShellRuntime } = require("./shell-runtime.cjs");
 
 class PiBridge {
   constructor(options) {
@@ -16,9 +17,18 @@ class PiBridge {
     this.announcedReady = false;
     this.fresh = false;
     this.readyTimer = null;
+    this.restartTimer = null;
+    this.restartAttempts = 0;
+    this.startedAt = 0;
+    this.readyWaiters = new Set();
+    this.responseWaiters = new Map();
   }
 
   start() {
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
     if (!fs.existsSync(this.cli)) {
       this.onRecord({ type: "bridge_status", status: "error" });
       this.onRecord({
@@ -36,13 +46,15 @@ class PiBridge {
     const freshStart = this.fresh === true;
     this.fresh = false;
 
+    const shellRuntime = prepareShellRuntime(process.env);
     const args = [this.cli, "--mode", "rpc", "--session-dir", sessions];
+    args.push(...shellRuntime.toolArgs);
     if (hasSessions && !freshStart) {
       args.push("--continue");
     }
 
     const env = {
-      ...process.env,
+      ...shellRuntime.env,
       PI_CODING_AGENT_DIR: this.dataDir,
       PI_SKIP_VERSION_CHECK: "1",
       NO_COLOR: "1",
@@ -51,6 +63,13 @@ class PiBridge {
     env.NODE_PATH = [vendorPath, process.env.NODE_PATH]
       .filter(Boolean)
       .join(path.delimiter);
+
+    this.onRecord({
+      type: "bridge_log",
+      text: shellRuntime.bashPath
+        ? `shell: Git Bash (${shellRuntime.bashPath})`
+        : "shell: PowerShell fallback (Git Bash not found)",
+    });
 
     let child;
     try {
@@ -67,6 +86,7 @@ class PiBridge {
     }
 
     this.child = child;
+    this.startedAt = Date.now();
     this.announcedReady = false;
     this.onRecord({ type: "bridge_status", status: "starting" });
 
@@ -80,6 +100,12 @@ class PiBridge {
         this.readyTimer = null;
       }
       this.onRecord({ type: "bridge_status", status: "ready" });
+      for (const waiter of this.readyWaiters) {
+        clearTimeout(waiter.timer);
+        this.send(waiter.command);
+        waiter.resolve(true);
+      }
+      this.readyWaiters.clear();
       if (freshStart) {
         this.send({
           id: `workspace-session-${Date.now()}`,
@@ -110,6 +136,14 @@ class PiBridge {
         return;
       }
 
+      if (record?.type === "response" && record.id) {
+        const waiter = this.responseWaiters.get(record.id);
+        if (waiter) {
+          clearTimeout(waiter.timer);
+          this.responseWaiters.delete(record.id);
+          waiter.resolve(record);
+        }
+      }
       this.onRecord(record);
     });
 
@@ -137,6 +171,7 @@ class PiBridge {
       if (this.child === child) {
         this.child = null;
       }
+      this.rejectResponseWaiters();
       if (!this.disposed) {
         this.onRecord({ type: "bridge_status", status: "exited" });
         if (code !== 0) {
@@ -145,8 +180,35 @@ class PiBridge {
             text: `Pi exited with code ${code}${signal ? ` (${signal})` : ""}`,
           });
         }
+        this.scheduleRestart();
       }
     });
+  }
+
+  scheduleRestart() {
+    if (this.disposed || this.restartTimer || this.child) {
+      return;
+    }
+    const stableFor = this.startedAt ? Date.now() - this.startedAt : 0;
+    if (stableFor >= 30_000) {
+      this.restartAttempts = 0;
+    }
+    const delays = [500, 1_500, 3_000, 6_000, 12_000];
+    const delay =
+      delays[Math.min(this.restartAttempts, delays.length - 1)];
+    this.restartAttempts += 1;
+    this.onRecord({
+      type: "bridge_status",
+      status: "restarting",
+      delayMs: delay,
+      attempt: this.restartAttempts,
+    });
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      if (!this.disposed && !this.child) {
+        this.start();
+      }
+    }, delay);
   }
 
   send(command) {
@@ -161,14 +223,62 @@ class PiBridge {
     }
   }
 
+  sendWhenReady(command, timeoutMs = 8000) {
+    if (
+      this.child &&
+      this.child.stdin.writable &&
+      this.announcedReady
+    ) {
+      this.send(command);
+      return Promise.resolve(true);
+    }
+    return new Promise((resolve) => {
+      const waiter = {
+        command,
+        resolve,
+        timer: setTimeout(() => {
+          this.readyWaiters.delete(waiter);
+          resolve(false);
+        }, timeoutMs),
+      };
+      this.readyWaiters.add(waiter);
+    });
+  }
+
+  waitForResponse(id, timeoutMs = 10000) {
+    return new Promise((resolve) => {
+      const waiter = {
+        resolve,
+        timer: setTimeout(() => {
+          this.responseWaiters.delete(id);
+          resolve(null);
+        }, timeoutMs),
+      };
+      this.responseWaiters.set(id, waiter);
+    });
+  }
+
+  rejectResponseWaiters() {
+    for (const waiter of this.responseWaiters.values()) {
+      clearTimeout(waiter.timer);
+      waiter.resolve(null);
+    }
+    this.responseWaiters.clear();
+  }
+
   stop() {
     this.disposed = true;
     if (this.readyTimer) {
       clearTimeout(this.readyTimer);
       this.readyTimer = null;
     }
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
     const child = this.child;
     this.child = null;
+    this.rejectResponseWaiters();
     if (!child) {
       return;
     }

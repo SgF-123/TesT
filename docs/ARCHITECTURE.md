@@ -17,7 +17,8 @@ TesT is split into four runtime layers:
 | `electron/git.cjs` | Git status, diffs, staging and commits |
 | `electron/git-worktree.cjs` | Worktree lifecycle and merge helpers |
 | `electron/remote-server.cjs` | Local web client, mobile UI and tunnel state |
-| `electron/channels/feishu.cjs` | Optional Feishu long-connection channel |
+| `electron/feishu-agent.cjs` | Feishu long-connection agent, approvals and push |
+| `electron/channels/feishu-config.cjs` | Feishu credential and preference storage |
 | `electron/data-location.cjs` | Portable/installer data-directory pointer |
 | `electron/paths.cjs` | Data, session, model and extension paths |
 

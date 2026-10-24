@@ -1,12 +1,13 @@
 {
   "name": "test-desktop",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.2.0",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "test": "node --experimental-strip-types --test scripts/architecture.test.mjs scripts/session-experience.test.mjs scripts/session-fork.test.mjs scripts/turn-bookmarks.test.mjs scripts/turn-navigation.test.mjs scripts/preferences.test.mjs scripts/draft-store.test.mjs",
     "preview": "vite preview",
     "electron:start": "electron .",
     "electron:dev": "npm run build && electron . --dev",
